@@ -62,6 +62,23 @@ const yearMonth = (m) => `${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月
 const yearOf = (m) => Number(m.slice(0, 4));
 const monthOf = (m) => Number(m.slice(5, 7));
 const dateText = (d) => `${Number(d.slice(5, 7))}月${Number(d.slice(8, 10))}日`;
+const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+const fullDate = (d) => {
+  const [y, m, day] = d.split("-").map(Number);
+  return `${y} 年 ${m} 月 ${day} 日 · ${weekdays[new Date(y, m - 1, day).getDay()]}`;
+};
+const validMonth = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m) && m >= "1900-01" && m <= "9999-12";
+const canShiftMonth = (m, delta, max = "9999-12") => {
+  const next = shiftMonth(m, delta);
+  return validMonth(next) && next <= max;
+};
+function dateInputError(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return "请按 YYYY-MM-DD 输入日期";
+  if (value < "1900-01-01") return "最早可记 1900-01-01";
+  if (value > localToday()) return "不能晚于今天";
+  if (!isValidDate(value)) return "日期不存在，请检查年月日";
+  return "";
+}
 const state = {
   data: null,
   page: "home",
@@ -91,6 +108,8 @@ const state = {
   showAllRanking: false,
   trendPoint: null,
   saveBusy: false,
+  scrollByPage: {},
+  motion: "",
 };
 
 function activeCategories(type, includeHidden = false) {
@@ -105,33 +124,65 @@ function entryRows(entries) {
   return groups
     .map(
       (g) =>
-        `<div class="group-head"><span>${E(g.date)}</span><span>收入 ${formatYen(g.income)} · 支出 ${formatYen(g.expense)}</span></div><div class="list">${g.rows.map((e) => `<button class="record" data-action="detail" data-id="${E(e.id)}"><span class="ico">${icon(cById(e.categoryId)?.iconKey)}</span><span class="record-text">${E(cName(e.categoryId))}${e.note ? `<small>${E(e.note)}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`).join("")}</div>`,
+        `<div class="group-head"><span>${E(fullDate(g.date))}</span><span>收入 ${formatYen(g.income)} · 支出 ${formatYen(g.expense)}</span></div><div class="list">${g.rows.map((e) => `<button class="record" data-action="detail" data-id="${E(e.id)}"><span class="ico">${categoryIcon(cById(e.categoryId))}</span><span class="record-text">${E(cName(e.categoryId))}${e.note ? `<small>${E(e.note)}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`).join("")}</div>`,
     )
     .join("");
 }
-function icon(key) {
-  return (
-    {
-      food: "♧",
-      bag: "◇",
-      home: "⌂",
-      bus: "▣",
-      gift: "♢",
-      heart: "♡",
-      book: "▤",
-      briefcase: "▣",
-      medical: "✚",
-      pet: "♧",
-      car: "▰",
-      other: "◌",
-    }[key] || "◌"
-  );
+const iconPaths = {
+  food: '<path d="M4 12h16M6 12a6 6 0 0 0 12 0M8 8l-1-3m9 3 1-3"/>',
+  bag: '<path d="M4 8h16l-1.5 13h-13L4 8Zm4 0V6a4 4 0 0 1 8 0v2"/>',
+  home: '<path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/>',
+  bus: '<rect x="4" y="4" width="16" height="15" rx="3"/><path d="M4 11h16M8 19v2m8-2v2M8 15h1m6 0h1"/>',
+  gift: '<rect x="3" y="9" width="18" height="12" rx="2"/><path d="M2 9h20M12 9v12M12 9c-7 0-7-6-4-6s4 6 4 6Zm0 0c7 0 7-6 4-6s-4 6-4 6Z"/>',
+  heart: '<path d="M20 9c0 5-8 11-8 11S4 14 4 9a4.5 4.5 0 0 1 8-2 4.5 4.5 0 0 1 8 2Z"/>',
+  book: '<path d="M4 4h14a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V4Zm0 14a2 2 0 0 1 2-2h14M8 8h8"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M9 7V4h6v3M3 13h18M10 13v2h4v-2"/>',
+  medical: '<path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6V3Z"/>',
+  pet: '<path d="M7 14c-3 2-1 7 3 6h4c4 1 6-4 3-6l-3-3h-4l-3 3ZM5 8h.01M9 5h.01M15 5h.01M19 8h.01"/>',
+  car: '<path d="M4 11 6 5h12l2 6v8H4v-8Zm0 0h16M7 15h2m6 0h2M6 19v2m12-2v2"/>',
+  other: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8m-4-4h8"/>',
+  daily: '<rect x="4" y="7" width="16" height="14" rx="2"/><path d="M7 7V4h10v3M8 12h8M8 16h5"/>',
+  veg: '<path d="M8 20C2 13 5 5 19 4c1 13-5 18-11 16ZM8 20 18 7"/>',
+  fruit: '<path d="M12 7C6 4 3 8 5 15c2 6 6 6 7 5 1 1 5 1 7-5 2-7-1-11-7-8Zm0 0c0-3 2-5 5-5"/>',
+  snack: '<path d="M5 6h14l2 6-2 7H5l-2-7 2-6ZM8 10h.01M15 12h.01M10 16h.01"/>',
+  sport: '<path d="M4 9v6m3-9v12m3-8v4m4-4v4m3-8v12m3-9v6M4 12h16"/>',
+};
+const categoryArt = {
+  "expense-2": ["bag", "daily"],
+  "expense-4": ["food", "veg"],
+  "expense-5": ["food", "fruit"],
+  "expense-6": ["food", "snack"],
+  "expense-7": ["heart", "sport"],
+};
+const uiPaths = {
+  list: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  chart: '<path d="M3 20V4M3 20h18M7 15l4-4 3 2 6-7"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  person: '<circle cx="12" cy="7" r="4"/><path d="M4 21c0-5 3-8 8-8s8 3 8 8"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4m8-4v4M8 14h2m4 0h2m-8 4h2"/>',
+  note: '<path d="M4 20h16M7 16 17 6l2 2-10 10-3 1 1-3Z"/>',
+  eye: '<path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M3 3 21 21M9 7c1-.6 2-.9 3-.9 6 0 10 5.9 10 5.9a17 17 0 0 1-4 4M6 8a17 17 0 0 0-4 4s4 6 10 6c1.5 0 3-.4 4.2-1"/>',
+  chevronLeft: '<path d="m15 5-7 7 7 7"/>',
+  chevronRight: '<path d="m9 5 7 7-7 7"/>',
+  chevronDown: '<path d="m5 9 7 7 7-7"/>',
+  close: '<path d="M5 5 19 19M19 5 5 19"/>',
+  check: '<path d="m5 12 5 5 9-10"/>',
+};
+function svgIcon(path) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
 }
+function icon(key) { return svgIcon(iconPaths[key] || iconPaths.other); }
+function categoryIcon(category) {
+  const art = categoryArt[category?.id];
+  return icon(art && category.iconKey === art[0] ? art[1] : category?.iconKey);
+}
+function uiIcon(key) { return svgIcon(uiPaths[key]); }
 function seg(items, value, action) {
-  return `<div class="seg">${items.map(([v, label]) => `<button data-action="${action}" data-value="${v}" class="${value === v ? "on" : ""}">${label}</button>`).join("")}</div>`;
+  return `<div class="seg" role="group">${items.map(([v, label]) => `<button data-action="${action}" data-value="${v}" class="${value === v ? "on" : ""}" aria-pressed="${value === v}">${label}</button>`).join("")}</div>`;
 }
 function periodPicker(month, action = "set-month") {
-  return `<div class="period"><button data-action="${action}" data-delta="-1" aria-label="上个月">‹</button><button data-action="pick-month"><strong>${yearMonth(month)} ▾</strong></button><button data-action="${action}" data-delta="1" aria-label="下个月">›</button></div>`;
+  return `<div class="period month-period"><button class="period-arrow" data-action="${action}" data-delta="-1" aria-label="上个月" ${canShiftMonth(month, -1) ? "" : "disabled"}>${uiIcon("chevronLeft")}</button><button class="period-current" data-action="pick-month" aria-label="选择月份，当前${yearMonth(month)}"><strong>${yearMonth(month)}</strong>${uiIcon("chevronDown")}</button><button class="period-arrow" data-action="${action}" data-delta="1" aria-label="下个月" ${canShiftMonth(month, 1) ? "" : "disabled"}>${uiIcon("chevronRight")}</button></div>`;
 }
 function hero(label, t) {
   return `<div class="card hero"><div class="eyebrow">${label}</div><div class="hero-value">${formatYen(t.balance)}</div><div class="summary-grid"><div><span class="eyebrow">收入</span><strong class="income">${formatYen(t.income)}</strong></div><div><span class="eyebrow">支出</span><strong>${formatYen(t.expense)}</strong></div></div></div>`;
@@ -155,26 +206,26 @@ function detail() {
   return `<div class="card" style="text-align:center"><div class="eyebrow">${typeName(e.type)}</div><div class="hero-value ${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${formatYen(e.amountMinor)}</div><span class="chip">${E(cName(e.categoryId))}</span></div><div class="card"><div class="metric"><span>分类</span><strong>${E(cName(e.categoryId))}</strong></div><div class="metric"><span>日期</span><strong>${E(e.businessDate)}</strong></div><div class="metric"><span>备注</span><strong style="white-space:pre-wrap;overflow-wrap:anywhere">${E(e.note || "无")}</strong></div><div class="metric"><span>创建</span><strong>${E(new Date(e.createdAt).toLocaleString("zh-CN"))}</strong></div></div><button class="primary" data-action="edit-entry">编辑记录</button><button class="outline danger" data-action="ask-delete-entry">删除记录</button>`;
 }
 function entryPage() {
-  const d = state.entry,
-    cats = activeCategories(d.type, true).filter(
-      (c) => !c.hidden || c.id === d.categoryId,
-    ),
-    shown = state.showAllCats ? cats : cats.slice(0, 8);
-  return `${seg(
-    [
-      [EXPENSE, "支出"],
-      [INCOME, "收入"],
-    ],
-    d.type,
-    "entry-type",
-  )}<div class="row"><h2 class="heading">选择分类</h2><button class="plain" data-action="category-manage">分类管理</button></div><div class="gridcats">${shown.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}"><span class="ico">${icon(c.iconKey)}</span>${E(c.name)}</button>`).join("")}</div>${cats.length > 8 ? `<button class="plain" data-action="toggle-cats">${state.showAllCats ? "收起" : "全部分类"}</button>` : ""}<label>${typeName(d.type)}金额</label><div id="expression" class="amount-editor">${E(d.expr || "0.00")}</div><div id="entryError" class="error">${E(d.error || "")}</div><label for="entryDate">日期 ${d.date !== localToday() ? '<span class="chip">补记</span>' : ""}</label><input id="entryDate" class="field" type="date" min="1900-01-01" max="${localToday()}" value="${E(d.date)}"><label for="entryNote">备注（可选）</label><textarea id="entryNote" class="field" rows="2" maxlength="200" placeholder="写点什么…">${E(d.note)}</textarea><div class="keys">${["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "今天"].map((k) => `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}">${k}</button>`).join("")}</div><button class="primary" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "完成 · 保存记录"}</button>`;
+  const d = state.entry;
+  const cats = activeCategories(d.type, true).filter((c) => !c.hidden || c.id === d.categoryId);
+  const shown = state.showAllCats ? cats : cats.slice(0, 8);
+  const categories = shown.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
+  const keys = ["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "日期"].map((k) => k === "日期" ? `<button class="op key-date" data-action="pick-date" aria-label="选择记账日期">${uiIcon("calendar")}<span>日期</span></button>` : `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}" aria-label="${k === "⌫" ? "退格" : k}">${k}</button>`).join("");
+  const categoryActions = `${cats.length > 8 ? `<button class="plain" data-action="toggle-cats">${state.showAllCats ? "收起" : "全部分类"}</button>` : ""}<button class="plain" data-action="category-manage">管理</button>`;
+  return `<div class="entry-layout"><div class="entry-fields">
+    ${seg([[EXPENSE, "支出"], [INCOME, "收入"]], d.type, "entry-type")}
+    <div class="row category-heading"><h2 class="heading">选择分类</h2><div class="category-actions">${categoryActions}</div></div>
+    <div class="gridcats">${categories}</div>
+    <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div><button class="entry-date" data-action="pick-date" aria-label="选择记账日期，当前${E(fullDate(d.date))}">${uiIcon("calendar")}<span>${E(d.date)} · ${E(fullDate(d.date).split("· ")[1])}</span>${d.date !== localToday() ? '<span class="backdate">补记</span>' : ""}${uiIcon("chevronRight")}</button></div>
+    <textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
+  </div><div class="entry-dock"><div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></div></div>`;
 }
 function categoryRanks(entries, type, click = true) {
   const ranked = categoryTotals(entries, state.data.categories, type),
     total = totals(entries)[type === INCOME ? "income" : "expense"];
   if (!ranked.length)
     return empty(`暂无${typeName(type)}分类数据`, "这个周期没有可统计的记录。");
-  return `<div class="card">${ranked.map((r) => `<button class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span>${icon(r.category.iconKey)}　${E(r.category.name)}</span><strong>${formatYen(r.amountMinor)}</strong></div><div class="row micro"><span>${r.percent.toFixed(1)}%</span><span>${total ? `${money(r.amountMinor)} / ${money(total)}` : ""}</span></div><div class="bar"><i style="width:${r.percent}%"></i></div></button>`).join("")}</div>`;
+  return `<div class="card">${ranked.map((r) => `<button class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span>${categoryIcon(r.category)}　${E(r.category.name)}</span><strong>${formatYen(r.amountMinor)}</strong></div><div class="row micro"><span>${r.percent.toFixed(1)}%</span><span>${total ? `${money(r.amountMinor)} / ${money(total)}` : ""}</span></div><div class="bar"><i style="width:${r.percent}%"></i></div></button>`).join("")}</div>`;
 }
 function chart(points) {
   if (!points.length || points.every((p) => p.value === 0))
@@ -303,7 +354,7 @@ function categoryManage() {
     active = list.filter((c) => !c.hidden),
     hidden = list.filter((c) => c.hidden);
   const item = (c) =>
-    `<div class="menu" draggable="true" data-catdrag="${E(c.id)}"><span class="ico">${icon(c.iconKey)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · 拖动排序</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button><button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button></div>`;
+    `<div class="menu" draggable="true" data-catdrag="${E(c.id)}"><span class="ico">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · 拖动排序</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button><button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button></div>`;
   return `${seg(
     [
       [EXPENSE, "支出"],
@@ -477,17 +528,34 @@ function header() {
       categories: "分类管理",
       settings: "设置与数据",
     };
-  return `<header class="top">${main ? "" : `<button class="back" data-action="back" aria-label="返回">‹</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${main ? `<button data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${state.data.preferences.hideAmountsByDefault ? "◉" : "◎"}</button>` : ""}</header>`;
+  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${main ? `<button class="top-icon" data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${uiIcon(state.data.preferences.hideAmountsByDefault ? "eyeOff" : "eye")}</button>` : ""}</header>`;
 }
 function navbar() {
   if (!["home", "stats", "tools", "mine"].includes(state.page)) return "";
   const items = [
-    ["home", "明细", "⌂"],
-    ["stats", "统计", "▥"],
-    ["tools", "工具", "▣"],
-    ["mine", "我的", "◯"],
+    ["home", "明细", "list"],
+    ["stats", "统计", "chart"],
+    ["tools", "工具", "grid"],
+    ["mine", "我的", "person"],
   ];
-  return `<button class="fab" data-action="new-entry">＋ 记一笔</button><nav class="bottom">${items.map(([p, label, glyph]) => `<button data-action="nav" data-value="${p}" class="${state.page === p ? "active" : ""}"><span style="font-size:23px;line-height:1">${glyph}</span>${label}</button>`).join("")}</nav>`;
+  return `<button class="fab" data-action="new-entry"><span aria-hidden="true">＋</span>记一笔</button><nav class="bottom" aria-label="主导航">${items.map(([p, label, glyph]) => `<button data-action="nav" data-value="${p}" class="${state.page === p ? "active" : ""}" aria-current="${state.page === p ? "page" : "false"}"><span class="nav-icon">${uiIcon(glyph)}</span><span>${label}</span></button>`).join("")}</nav>`;
+}
+function monthModal(m) {
+  const year = Number(m.pending.slice(0, 4)), selectedMonth = Number(m.pending.slice(5, 7));
+  return `<div class="modal-head"><h2>选择月份</h2><button class="icon-button" data-action="close-modal" aria-label="关闭">${uiIcon("close")}</button></div><div class="calendar-period"><button class="icon-button" data-action="month-year-shift" data-delta="-1" aria-label="上一年" ${year <= 1900 ? "disabled" : ""}>${uiIcon("chevronLeft")}</button><strong>${year} 年</strong><button class="icon-button" data-action="month-year-shift" data-delta="1" aria-label="下一年" ${year >= 9999 ? "disabled" : ""}>${uiIcon("chevronRight")}</button></div><div class="month-grid">${Array.from({ length: 12 }, (_, i) => { const value = `${year}-${String(i + 1).padStart(2, "0")}`; return `<button data-action="select-month" data-value="${value}" class="${selectedMonth === i + 1 ? "selected" : ""} ${value === currentMonth() ? "today-month" : ""}" aria-pressed="${selectedMonth === i + 1}">${i + 1} 月</button>`; }).join("")}</div><div class="modal-actions calendar-actions"><button class="outline" data-action="close-modal">取消</button><button class="primary" data-action="confirm-month">查看此月</button></div>`;
+}
+function dateJump(m) {
+  const year = m.jumpYear ?? Number(m.month.slice(0, 4)), maxMonth = localToday().slice(0, 7);
+  return `<div class="calendar-period"><button class="icon-button" data-action="date-year-shift" data-delta="-1" aria-label="上一年" ${year <= 1900 ? "disabled" : ""}>${uiIcon("chevronLeft")}</button><strong>${year} 年</strong><button class="icon-button" data-action="date-year-shift" data-delta="1" aria-label="下一年" ${year >= Number(maxMonth.slice(0, 4)) ? "disabled" : ""}>${uiIcon("chevronRight")}</button></div><div class="month-grid">${Array.from({length: 12}, (_, i) => {const value = `${year}-${String(i + 1).padStart(2, "0")}`; return `<button data-action="date-jump-month" data-value="${value}" class="${value === m.month ? "selected" : ""}" ${value > maxMonth ? "disabled" : ""}>${i + 1} 月</button>`;}).join("")}</div><button class="plain" data-action="calendar-mode">返回日历</button>`;
+}
+function dateModal(m) {
+  const today = localToday(), maxMonth = today.slice(0, 7), first = new Date(Number(m.month.slice(0, 4)), Number(m.month.slice(5, 7)) - 1, 1), offset = (first.getDay() + 6) % 7, days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const cells = Array.from({ length: offset }, () => '<span class="calendar-blank"></span>');
+  for (let day = 1; day <= days; day++) {
+    const date = `${m.month}-${String(day).padStart(2, "0")}`;
+    cells.push(`<button class="day ${date === m.pending ? "selected" : ""} ${date === today ? "today" : ""}" data-action="select-date" data-value="${date}" aria-label="${E(fullDate(date))}${date === today ? "，今天" : ""}${date === m.pending ? "，已选中" : ""}" aria-pressed="${date === m.pending}" ${date > today ? "disabled" : ""}>${day}</button>`);
+  }
+  return `<div class="modal-head"><h2>选择日期</h2><button class="icon-button" data-action="close-modal" aria-label="关闭">${uiIcon("close")}</button></div><div class="picked-date">已选 ${E(fullDate(m.pending))}</div><div class="quick-dates"><button class="soft-button" data-action="quick-date" data-value="${today}">今天</button><button class="soft-button" data-action="quick-date" data-value="${shiftDate(today, -1)}">昨天</button></div>${m.mode === "input" ? `<label for="dateManual">输入日期 · YYYY-MM-DD</label><input id="dateManual" class="field" type="text" inputmode="numeric" maxlength="10" autocomplete="off" value="${E(m.input ?? m.pending)}" placeholder="例如 2026-09-28"><p id="dateError" class="error" role="alert">${E(m.error || "")}</p><button class="plain" data-action="calendar-mode">返回日历</button>` : m.mode === "jump" ? dateJump(m) : `<div class="calendar-period"><button class="icon-button" data-action="date-month-shift" data-delta="-1" aria-label="上个月" ${canShiftMonth(m.month, -1, maxMonth) ? "" : "disabled"}>${uiIcon("chevronLeft")}</button><button class="calendar-month-title" data-action="date-jump">${yearMonth(m.month)} ${uiIcon("chevronDown")}</button><button class="icon-button" data-action="date-month-shift" data-delta="1" aria-label="下个月" ${canShiftMonth(m.month, 1, maxMonth) ? "" : "disabled"}>${uiIcon("chevronRight")}</button></div><div class="weekday-row">${["一", "二", "三", "四", "五", "六", "日"].map((d) => `<span>${d}</span>`).join("")}</div><div class="day-grid">${cells.join("")}</div><button class="date-input-link" data-action="date-input-mode">输入日期 ${uiIcon("chevronRight")}</button>`}<div class="modal-actions calendar-actions"><button class="outline" data-action="close-modal">取消</button><button class="primary" data-action="confirm-date" ${m.error ? "disabled" : ""}>确定</button></div>`;
 }
 function modalHtml() {
   const m = state.modal;
@@ -498,10 +566,13 @@ function modalHtml() {
       body = `<h2>${E(m.title)}</h2><p>${E(m.message)}</p><div class="modal-actions"><button class="outline" data-action="close-modal">取消</button><button class="primary ${m.danger ? "danger" : ""}" data-action="modal-confirm">${E(m.confirm || "确认")}</button></div>`;
       break;
     case "pickMonth":
-      body = `<h2>选择年月</h2><input class="field" id="monthPicker" type="month" min="1900-01" value="${E(state.month)}"><button class="primary" data-action="confirm-month">确定</button><button class="outline" data-action="close-modal">取消</button>`;
+      body = monthModal(m);
+      break;
+    case "pickDate":
+      body = dateModal(m);
       break;
     case "category":
-      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${icon(k)} ${k}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !cById(m.id)?.isBuiltin && !state.data.entries.some((e) => e.categoryId === m.id) ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
+      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${k}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !cById(m.id)?.isBuiltin && !state.data.entries.some((e) => e.categoryId === m.id) ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
       break;
     case "restore":
       body = `<h2>恢复备份</h2><p>这会替换当前全部数据。请先导出当前账本备份，并确认文件已经保留在电脑上。</p><button class="outline" data-action="export">导出当前备份</button><label><input type="checkbox" id="backupConfirmed"> 我已确认备份文件已保留</label><label for="restoreFile">选择 JSON 备份</label><input id="restoreFile" class="field" type="file" accept=".json,application/json"><p id="restoreError" class="error"></p><button class="primary" data-action="preview-restore">校验并预览</button><button class="plain" data-action="close-modal">取消</button>`;
@@ -522,10 +593,16 @@ function modalHtml() {
       body = `<h2>清空全部数据</h2><p class="danger">流水、分类调整、预算和资产都将删除。请先导出备份。</p><button class="outline" data-action="export">导出当前备份</button><label><input id="clearBacked" type="checkbox"> 我已保留备份，仍要清空</label><label for="clearPhrase">输入“清空账本”再次确认</label><input id="clearPhrase" class="field" placeholder="清空账本"><p id="clearError" class="error"></p><button class="primary" data-action="confirm-clear">确认清空</button><button class="outline" data-action="close-modal">取消</button>`;
       break;
   }
-  return `<div class="modalback"><div class="modal" role="dialog" aria-modal="true">${body}</div></div>`;
+  return `<div class="modalback ${m.entering ? "modal-enter" : ""}"><button class="modal-scrim" data-action="close-modal" aria-label="关闭弹层"></button><div class="modal ${m.kind === "pickDate" || m.kind === "pickMonth" ? "calendar-modal" : ""}" role="dialog" aria-modal="true" aria-label="${m.kind === "pickDate" ? "选择日期" : m.kind === "pickMonth" ? "选择月份" : "操作弹层"}"><span class="modal-handle" aria-hidden="true"></span>${body}</div></div>`;
 }
 function render() {
   if (!state.data) return;
+  const oldContent = $(".content"), samePage = phone.dataset.page === state.page;
+  const oldScroll = oldContent?.scrollTop || 0;
+  const oldEntryScroll = $(".entry-fields")?.scrollTop || 0;
+  const oldFocus = state.modal && document.activeElement?.closest(".modal")
+    ? { id: document.activeElement.id, action: document.activeElement.dataset.action, value: document.activeElement.dataset.value }
+    : null;
   const pages = {
     home,
     detail,
@@ -545,19 +622,43 @@ function render() {
   const main = ["home", "stats", "tools", "mine"].includes(state.page);
   phone.innerHTML =
     header() +
-    `<main class="content ${main ? "" : "secondary"}">${pages[state.page]?.() || ""}</main>` +
+    `<main class="content ${main ? "" : "secondary"} ${state.page === "entry" ? "entry-content" : ""} ${state.motion}">${pages[state.page]?.() || ""}</main>` +
     navbar() +
     modalHtml() +
     (state.toast
       ? `<div class="toast" role="status">${E(state.toast)}${state.undo ? '<button class="plain" style="color:#fff" data-action="undo-delete">撤销</button>' : ""}</div>`
       : "");
+  phone.dataset.page = state.page;
+  $(".content").scrollTop = samePage ? oldScroll : state.scrollByPage[state.page] || 0;
+  if (samePage && state.page === "entry") $(".entry-fields").scrollTop = oldEntryScroll;
+  if (state.modal) {
+    phone.querySelectorAll(".top, .content, .fab, .bottom").forEach((el) => el.inert = true);
+  }
+  state.motion = "";
+  if (state.modal?.entering) {
+    state.modal.entering = false;
+    $(".modal .icon-button, .modal input, .modal button")?.focus({ preventScroll: true });
+  } else if (state.modal && oldFocus) {
+    const same = oldFocus.id ? document.getElementById(oldFocus.id) : [...phone.querySelectorAll(".modal [data-action]")].find((el) => el.dataset.action === oldFocus.action && el.dataset.value === oldFocus.value);
+    same?.focus({ preventScroll: true });
+  }
 }
 function navigate(page) {
+  if ($(".content")) state.scrollByPage[state.page] = $(".content").scrollTop;
+  const mainFrom = ["home", "stats", "tools", "mine"].includes(state.page);
+  const mainTo = ["home", "stats", "tools", "mine"].includes(page);
+  state.motion = mainFrom && mainTo ? "motion-fade" : "motion-forward";
   state.page = page;
   state.modal = null;
   state.trendPoint = null;
   render();
-  $(".content")?.scrollTo(0, 0);
+}
+function withViewTransition(change) {
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.startViewTransition(change);
+  } else {
+    change();
+  }
 }
 let toastTimer;
 function toast(msg) {
@@ -573,12 +674,14 @@ function toast(msg) {
   );
 }
 function modal(m) {
-  state.modal = m;
+  state.modal = { ...m, entering: true, returnFocus: document.activeElement?.dataset.action };
   render();
 }
 function closeModal() {
+  const action = state.modal?.returnFocus;
   state.modal = null;
   render();
+  if (action) $(`[data-action="${action}"]`)?.focus({ preventScroll: true });
 }
 async function reload() {
   state.data = await loadLedger();
@@ -661,12 +764,6 @@ function back() {
 function onKey(key) {
   const d = state.entry;
   let s = d.expr;
-  if (key === "今天") {
-    d.date = localToday();
-    const input = $("#entryDate");
-    if (input) input.value = d.date;
-    return;
-  }
   if (key === "清空") s = "";
   else if (key === "⌫") s = s.slice(0, -1);
   else if (key === "+" || key === "−") {
@@ -681,13 +778,13 @@ function onKey(key) {
   }
   d.expr = s;
   d.error = "";
-  $("#expression").textContent = s || "0.00";
+  $("#expression").textContent = `¥ ${s || "0.00"}`;
+  $("#expression").classList.toggle("long", s.length > 13);
   $("#entryError").textContent = "";
 }
 async function saveEntry() {
   if (state.saveBusy) return;
   const d = state.entry;
-  d.date = $("#entryDate").value;
   d.note = $("#entryNote").value.trim();
   let amountMinor;
   try {
@@ -989,7 +1086,7 @@ async function handleAction(el) {
   try {
     switch (a) {
       case "nav":
-        navigate(v);
+        if (state.page !== v) withViewTransition(() => navigate(v));
         break;
       case "go-home":
         navigate("home");
@@ -998,7 +1095,7 @@ async function handleAction(el) {
         back();
         break;
       case "new-entry":
-        beginEntry();
+        withViewTransition(() => beginEntry());
         break;
       case "detail":
         state.detailId = id;
@@ -1025,6 +1122,7 @@ async function handleAction(el) {
         break;
       case "entry-type": {
         const d = state.entry;
+        if (d.type === v) break;
         d.type = v;
         d.categoryId = activeCategories(v).some(
           (c) => c.id === state.lastCategory[v],
@@ -1032,6 +1130,7 @@ async function handleAction(el) {
           ? state.lastCategory[v]
           : activeCategories(v)[0]?.id || null;
         state.showAllCats = false;
+        state.motion = "motion-fade";
         render();
         break;
       }
@@ -1054,20 +1153,106 @@ async function handleAction(el) {
       case "save-entry":
         await saveEntry();
         break;
-      case "set-month":
-        state.month = shiftMonth(state.month, delta);
+      case "pick-date":
+        modal({ kind: "pickDate", pending: state.entry.date, month: state.entry.date.slice(0, 7), mode: "calendar", input: state.entry.date, error: "" });
+        break;
+      case "date-month-shift": {
+        const m = state.modal;
+        if (m?.kind === "pickDate" && canShiftMonth(m.month, delta, localToday().slice(0, 7))) {
+          m.month = shiftMonth(m.month, delta);
+          render();
+        }
+        break;
+      }
+      case "date-jump":
+        state.modal.mode = "jump";
+        state.modal.jumpYear = Number(state.modal.month.slice(0, 4));
         render();
         break;
+      case "date-year-shift":
+        state.modal.jumpYear = Math.min(Number(localToday().slice(0, 4)), Math.max(1900, state.modal.jumpYear + delta));
+        render();
+        break;
+      case "date-jump-month":
+        if (validMonth(v) && v <= localToday().slice(0, 7)) {
+          state.modal.month = v;
+          state.modal.mode = "calendar";
+          render();
+        }
+        break;
+      case "select-date":
+      case "quick-date":
+        if (isValidDate(v)) {
+          state.modal.pending = v;
+          state.modal.month = v.slice(0, 7);
+          state.modal.input = v;
+          state.modal.error = "";
+          state.modal.mode = "calendar";
+          render();
+        }
+        break;
+      case "date-input-mode":
+        state.modal.mode = "input";
+        state.modal.input = state.modal.pending;
+        state.modal.error = "";
+        render();
+        $("#dateManual")?.focus();
+        break;
+      case "calendar-mode":
+        state.modal.mode = "calendar";
+        state.modal.error = "";
+        render();
+        break;
+      case "confirm-date": {
+        const m = state.modal;
+        if (m.mode === "input") {
+          m.input = $("#dateManual").value.trim();
+          m.error = dateInputError(m.input);
+          if (m.error) {
+            $("#dateError").textContent = m.error;
+            $("[data-action='confirm-date']").disabled = true;
+            break;
+          }
+          m.pending = m.input;
+        }
+        if (!isValidDate(m.pending)) break;
+        state.entry.date = m.pending;
+        closeModal();
+        break;
+      }
+      case "set-month":
+        if (canShiftMonth(state.month, delta)) {
+          state.month = shiftMonth(state.month, delta);
+          state.motion = delta > 0 ? "motion-next" : "motion-prev";
+          render();
+        }
+        break;
       case "pick-month":
-        modal({ kind: "pickMonth" });
+        modal({ kind: "pickMonth", pending: state.month });
+        break;
+      case "month-year-shift": {
+        const m = state.modal;
+        const year = Number(m.pending.slice(0, 4)) + delta;
+        if (year >= 1900 && year <= 9999) {
+          m.pending = `${year}-${m.pending.slice(5, 7)}`;
+          render();
+        }
+        break;
+      }
+      case "select-month":
+        if (validMonth(v)) {
+          state.modal.pending = v;
+          render();
+        }
         break;
       case "confirm-month": {
-        const value = $("#monthPicker").value;
-        if (!/^\d{4}-\d{2}$/.test(value) || value < "1900-01") {
+        const value = state.modal.pending;
+        if (!validMonth(value)) {
           toast("请选择有效月份");
           break;
         }
         state.month = value;
+        state.motion = "motion-fade";
         closeModal();
         break;
       }
@@ -1089,6 +1274,7 @@ async function handleAction(el) {
         else
           state.statsAnchor = `${Number(state.statsAnchor.slice(0, 4)) + delta}-01-01`;
         state.trendPoint = null;
+        state.motion = delta > 0 ? "motion-next" : "motion-prev";
         render();
         break;
       }
@@ -1304,7 +1490,12 @@ phone.addEventListener("click", (e) => {
 phone.addEventListener("input", (e) => {
   if (state.page === "entry" && state.entry) {
     if (e.target.id === "entryNote") state.entry.note = e.target.value;
-    if (e.target.id === "entryDate") state.entry.date = e.target.value;
+  }
+  if (e.target.id === "dateManual" && state.modal?.kind === "pickDate") {
+    state.modal.input = e.target.value.trim();
+    state.modal.error = dateInputError(state.modal.input);
+    $("#dateError").textContent = state.modal.error;
+    $("[data-action='confirm-date']").disabled = !!state.modal.error;
   }
 });
 phone.addEventListener("dragstart", (e) => {
