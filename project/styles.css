@@ -107,7 +107,7 @@ button:disabled {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 18px 20px 106px;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 .content.secondary {
   padding-bottom: 26px;
@@ -751,7 +751,7 @@ button:disabled { opacity: .55; }
 .top.entry-top { position: relative; justify-content: center; }
 .entry-top h1 { flex: none; }
 .entry-top .back { position: absolute; left: 12px; font-size: 1rem !important; font-weight: 650; }
-.content { padding-top: 14px; scrollbar-color: #c6d8ca transparent; }
+.content { padding-top: 14px; }
 .content.secondary { padding-bottom: 30px; }
 .bottom {
   border-top-color: var(--line);
@@ -774,8 +774,6 @@ button:disabled { opacity: .55; }
   font-size: 1rem;
 }
 .fab span { font-size: 1.667rem; line-height: 1; font-weight: 400; }
-.fab,
-.entry-amount-card { view-transition-name: entry-action; }
 .card {
   border-color: var(--line);
   border-radius: 20px;
@@ -840,7 +838,7 @@ button:disabled { opacity: .55; }
 .field { border-color: var(--line); color: var(--ink); }
 .entry-content { padding-top: 8px; padding-bottom: 12px !important; overflow: hidden; display: flex; flex-direction: column; }
 .entry-layout { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.entry-fields { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-bottom: 7px; }
+.entry-fields { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; padding-bottom: 7px; }
 .entry-dock { flex: none; padding-top: 3px; background: var(--canvas); }
 .entry-layout > .seg { margin: 0 0 13px; }
 .category-heading { flex-wrap: wrap; }
@@ -919,12 +917,11 @@ button:disabled { opacity: .55; }
 @media (prefers-reduced-motion: no-preference) {
   ::view-transition-old(root),
   ::view-transition-new(root) { animation-duration: .22s; }
-  ::view-transition-old(entry-action),
-  ::view-transition-new(entry-action) { animation-duration: .28s; animation-timing-function: ease-out; }
   button { transition: background-color .12s ease-out, color .12s ease-out, transform .12s ease-out, box-shadow .16s ease-out; }
   button:active:not(:disabled) { transform: scale(.98); }
   .cat.on .ico { animation: cat-select .17s ease-out; }
   .motion-fade { animation: view-fade .2s ease-out; }
+  .motion-entry { animation: view-entry .18s ease-out; }
   .motion-forward { animation: view-forward .26s ease-out; }
   .motion-next { animation: view-next .22s ease-out; }
   .motion-prev { animation: view-prev .22s ease-out; }
@@ -934,6 +931,7 @@ button:disabled { opacity: .55; }
   .fab:hover { box-shadow: 0 12px 25px #173a2b3a; }
   @keyframes cat-select { from { transform: scale(.94); } to { transform: scale(1); } }
   @keyframes view-fade { from { opacity: .45; } to { opacity: 1; } }
+  @keyframes view-entry { from { opacity: .75; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes view-forward { from { opacity: .5; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes view-next { from { opacity: .6; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
   @keyframes view-prev { from { opacity: .6; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
@@ -950,3 +948,11 @@ button:disabled { opacity: .55; }
 @media (max-width: 370px) {
   .calendar-modal { padding-inline: 12px; }
 }
+html, body, .content, .entry-fields, .modal, .table-wrap, .amount-editor { scrollbar-width: none; }
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+.content::-webkit-scrollbar,
+.entry-fields::-webkit-scrollbar,
+.modal::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar,
+.amount-editor::-webkit-scrollbar { display: none; }

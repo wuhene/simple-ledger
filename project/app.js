@@ -643,11 +643,11 @@ function render() {
     same?.focus({ preventScroll: true });
   }
 }
-function navigate(page) {
+function navigate(page, motion = null) {
   if ($(".content")) state.scrollByPage[state.page] = $(".content").scrollTop;
   const mainFrom = ["home", "stats", "tools", "mine"].includes(state.page);
   const mainTo = ["home", "stats", "tools", "mine"].includes(page);
-  state.motion = mainFrom && mainTo ? "motion-fade" : "motion-forward";
+  state.motion = motion ?? (mainFrom && mainTo ? "motion-fade" : "motion-forward");
   state.page = page;
   state.modal = null;
   state.trendPoint = null;
@@ -655,9 +655,9 @@ function navigate(page) {
 }
 function withViewTransition(change) {
   if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    document.startViewTransition(change);
+    document.startViewTransition(() => change(true));
   } else {
-    change();
+    change(false);
   }
 }
 let toastTimer;
@@ -687,7 +687,7 @@ async function reload() {
   state.data = await loadLedger();
   render();
 }
-function beginEntry(e = null) {
+function beginEntry(e = null, nativeTransition = false) {
   const type = e?.type || EXPENSE,
     preferred = state.lastCategory[type],
     valid = activeCategories(type).some((c) => c.id === preferred)
@@ -705,7 +705,7 @@ function beginEntry(e = null) {
   };
   state.entryOrigin = state.page;
   state.showAllCats = false;
-  navigate("entry");
+  navigate("entry", nativeTransition ? "" : "motion-entry");
 }
 function draftChanged() {
   const d = state.entry;
@@ -1086,7 +1086,7 @@ async function handleAction(el) {
   try {
     switch (a) {
       case "nav":
-        if (state.page !== v) withViewTransition(() => navigate(v));
+        if (state.page !== v) withViewTransition((nativeTransition) => navigate(v, nativeTransition ? "" : null));
         break;
       case "go-home":
         navigate("home");
@@ -1095,7 +1095,7 @@ async function handleAction(el) {
         back();
         break;
       case "new-entry":
-        withViewTransition(() => beginEntry());
+        withViewTransition((nativeTransition) => beginEntry(null, nativeTransition));
         break;
       case "detail":
         state.detailId = id;
