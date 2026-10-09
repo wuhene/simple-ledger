@@ -67,6 +67,16 @@ button:disabled {
   display: flex;
   flex-direction: column;
 }
+.phone-screen {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #f6f8f7;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 .phone.narrow {
   width: 360px;
 }
@@ -724,7 +734,8 @@ select:focus-visible {
 }
 button:disabled { opacity: .55; }
 .review { color: var(--secondary); }
-.phone { background: var(--canvas); }
+.phone, .phone-screen { background: var(--canvas); }
+html.entry-opening .phone-screen { view-transition-name: entry-cover; }
 .top {
   height: 66px;
   min-height: 66px;
@@ -917,6 +928,18 @@ button:disabled { opacity: .55; }
 @media (prefers-reduced-motion: no-preference) {
   ::view-transition-old(root),
   ::view-transition-new(root) { animation-duration: .22s; }
+  html.entry-opening::view-transition-old(root),
+  html.entry-opening::view-transition-new(root) { animation: none; }
+  html.entry-opening::view-transition-group(entry-cover) {
+    overflow: hidden;
+    border-radius: var(--entry-final-radius, 26px);
+  }
+  html.entry-opening::view-transition-old(entry-cover) { animation: entry-cover-under .38s ease-out both; }
+  html.entry-opening::view-transition-new(entry-cover) {
+    animation: entry-cover-up .38s cubic-bezier(.22, 1, .36, 1) both;
+    overflow: hidden;
+    box-shadow: 0 -12px 28px #173a2b26;
+  }
   button { transition: background-color .12s ease-out, color .12s ease-out, transform .12s ease-out, box-shadow .16s ease-out; }
   button:active:not(:disabled) { transform: scale(.98); }
   .cat.on .ico { animation: cat-select .17s ease-out; }
@@ -931,6 +954,11 @@ button:disabled { opacity: .55; }
   .fab:hover { box-shadow: 0 12px 25px #173a2b3a; }
   @keyframes cat-select { from { transform: scale(.94); } to { transform: scale(1); } }
   @keyframes view-fade { from { opacity: .45; } to { opacity: 1; } }
+  @keyframes entry-cover-under { from { opacity: 1; } to { opacity: .45; } }
+  @keyframes entry-cover-up {
+    from { opacity: 1; transform: translateY(100%); border-radius: 26px 26px 0 0; }
+    to { opacity: 1; transform: translateY(0); border-radius: var(--entry-final-radius, 26px); }
+  }
   @keyframes view-entry { from { opacity: .75; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes view-forward { from { opacity: .5; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes view-next { from { opacity: .6; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
@@ -942,6 +970,7 @@ button:disabled { opacity: .55; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 @media (max-width: 430px) {
+  :root { --entry-final-radius: 0px; }
   body { background: var(--canvas); }
 }
 .phone.narrow .calendar-modal { padding-inline: 4px; }

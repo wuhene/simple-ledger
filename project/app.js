@@ -620,14 +620,15 @@ function render() {
     settings,
   };
   const main = ["home", "stats", "tools", "mine"].includes(state.page);
-  phone.innerHTML =
+  phone.innerHTML = `<div class="phone-screen">` +
     header() +
     `<main class="content ${main ? "" : "secondary"} ${state.page === "entry" ? "entry-content" : ""} ${state.motion}">${pages[state.page]?.() || ""}</main>` +
     navbar() +
     modalHtml() +
     (state.toast
       ? `<div class="toast" role="status">${E(state.toast)}${state.undo ? '<button class="plain" style="color:#fff" data-action="undo-delete">撤销</button>' : ""}</div>`
-      : "");
+      : "") +
+    `</div>`;
   phone.dataset.page = state.page;
   $(".content").scrollTop = samePage ? oldScroll : state.scrollByPage[state.page] || 0;
   if (samePage && state.page === "entry") $(".entry-fields").scrollTop = oldEntryScroll;
@@ -659,6 +660,23 @@ function withViewTransition(change) {
   } else {
     change(false);
   }
+}
+let entryCoverTransition;
+function openEntryCover() {
+  if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    beginEntry();
+    return;
+  }
+  document.documentElement.classList.add("entry-opening");
+  const transition = document.startViewTransition(() => beginEntry(null, true));
+  entryCoverTransition = transition;
+  const cleanup = () => {
+    if (entryCoverTransition === transition) {
+      document.documentElement.classList.remove("entry-opening");
+      entryCoverTransition = null;
+    }
+  };
+  transition.finished.then(cleanup, cleanup);
 }
 let toastTimer;
 function toast(msg) {
@@ -1095,7 +1113,7 @@ async function handleAction(el) {
         back();
         break;
       case "new-entry":
-        withViewTransition((nativeTransition) => beginEntry(null, nativeTransition));
+        openEntryCover();
         break;
       case "detail":
         state.detailId = id;
