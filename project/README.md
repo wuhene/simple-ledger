@@ -1,28 +1,6 @@
-# 简账 Web 二版验收版
+# 简账应用工程
 
-本目录沿用 `wiki/2026-09-30-init/` 的业务规则，并实现 `wiki/2026-09-30-1/` 的二版视觉、日期选择和动效。它使用固定 390×844 手机画布，可切换为 360px。业务数据存于当前浏览器、当前地址的 IndexedDB；修改地址、端口或浏览器不会自动搬迁数据。
+- [`web/`](web/)：已验收的浏览器版本，用于在电脑上预览功能和交互。
+- [`android/`](android/)：原生 Android View + SQLite 工程，包含可下载安装的 [`SimpleLedger-debug.apk`](android/SimpleLedger-debug.apk)。
 
-## 启动
-
-需要 Python 3 和现代浏览器。在本目录运行：
-
-```powershell
-python -m http.server 4173 --bind 127.0.0.1
-```
-
-打开 `http://127.0.0.1:4173/`。保持端口不变，以便重新打开时仍可读取同一个浏览器账本。无需安装 npm 依赖。运行业务规则测试：
-
-```powershell
-npm test
-```
-
-建议用测试数据验收，再从“我的 → 设置与数据”导出 JSON 备份。浏览器内的测试记录不会自动进入 Android App。
-
-## 代码
-
-- `index.html`、`styles.css`：固定手机画布与界面。
-- `app.js`：14 个页面、交互与报告图片。
-- `model.js`：整数分金额、日期、统计及备份校验。
-- `storage.js`：IndexedDB 读写及全量恢复事务。
-
-初版验收记录见 `../wiki/2026-09-30-init/开发进度.md`。二版实现与验收状态见 `../wiki/2026-09-30-1/实现与验收记录.md`；当前分支的小屏、字体和性能补验见 `../wiki/2026-10-09/进度与测试.md`。记账键盘右下角“日期”可直接打开日期选择器，在弹层中可选“今天”。用户确认 Web 效果后才开始原生 Android 重写与 APK 打包。
+两套实现位于同一 `master` 主线，按需求分支开发并在验收后合入。Web 浏览器内的 IndexedDB 数据不会自动进入 Android App；可通过 JSON 备份导出和恢复。需求、UI 与验收记录在根目录 [`wiki/`](../wiki/)，当前交接见 [`HANDOFF.md`](../HANDOFF.md)。
