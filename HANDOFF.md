@@ -1,49 +1,43 @@
 # 简账项目交接文档
 
-更新：2026-10-10 · 当前分支：`2026-10-09` · 状态：Web 二版已验收，进入原生 Android 阶段
+更新：2026-10-10 · 当前需求分支：`2026-10-10` · 状态：原生 APK 已构建，待 Android 设备验收
 
 ## 接手先读
 
-1. 阅读根目录 [`AGENTS.md`](AGENTS.md) 的分支、Wiki、提交和验收约定。
-2. 阅读本文件、[`wiki/2026-10-09/Web二版-验收补强.md`](wiki/2026-10-09/Web二版-验收补强.md) 与 [`进度与测试.md`](wiki/2026-10-09/进度与测试.md)；二版 PRD/UI 见 `wiki/2026-09-30-1/`，初版业务规则见 `wiki/2026-09-30-init/`。
-3. 检查 `git status --short --branch` 并同步当前分支。用户已明确验收 Web 二版；合入 `master` 后从最新 `master` 新开安卓需求分支。
+1. 阅读 [`AGENTS.md`](AGENTS.md) 的分支、Wiki、提交与验收约定。
+2. 阅读 [`wiki/2026-10-10/原生Android-PRD与验收.md`](wiki/2026-10-10/原生Android-PRD与验收.md) 和 [`开发进度.md`](wiki/2026-10-10/开发进度.md)。原始业务规则见 `wiki/2026-09-30-init/`，二版视觉与转场见 `wiki/2026-09-30-1/` 和 `wiki/2026-10-09/`。
+3. 检查 `git status --short --branch`、远程分支及本地设备。每次开发改动同步更新本文件、AGENTS 待办及当前需求 Wiki，并与代码一起提交推送。
 
-## 分支与产品状态
+## 分支与工程
 
-- `master`：接受后的 Web 二版基线及 Wiki；`2026-10-09` 连同 `2026-09-30-1` 的内容合入并推送。
-- `2026-09-30-1`：二版视觉与动效 PRD、UI、视觉稿和 Web 实现，已通过用户验收，内容随 `2026-10-09` 合入。
-- `2026-10-09`：从 `master` 新建并引入二版基线，小屏、字体、性能及交互反馈补验完成，用户于 2026-10-10 确认“没问题”。
-- `project/`：可在电脑浏览器验收的固定手机画布 Web 版；业务数据存于当前浏览器、当前地址的 IndexedDB。原生 Android 代码和 APK 尚未开始。
-- 用户最近明确：现在可以原生 Android 转写；用系统返回手势/返回键代替页面中的冗余取消、返回按钮，保留有草稿时的放弃确认。Android SDK/Gradle 已按用户许可预装在被 Git 忽略的 `.tools/`。
+- `master-web`：已推送的 Web 二版验收基线，Web 后续需求从它开分支并验收后合回。
+- `master`：原生 Android 主线。现在仍是原先 Web 基线；`2026-10-10` 待用户验收通过后合入，届时 Web 源码由本需求分支的删除操作从 `master` 移走。
+- `2026-10-10`：本次原生 Android 需求分支，从已更新的 `master` 新建；只保留 `project/android/` 应用工程，历史需求 Wiki 继续保留。
+- APK：[`project/android/SimpleLedger-debug.apk`](project/android/SimpleLedger-debug.apk)，Debug 签名测试包，包名 `com.wuhene.simpleledger`，最低 Android 8.0（API 26）。Web 浏览器 IndexedDB 不会自动迁入，可通过 JSON 备份恢复。
 
-## 本轮改动
+## 本次实现
 
-| 文件 | 内容 |
-|---|---|
-| `project/styles.css` | 修复小屏保存按钮底边遮挡；相对字号；200% 字号布局；隐藏滚动条；画布内记账卡片上滑进入、下滑退出动画 |
-| `project/app.js` | “我的”页图标字号随字体设置缩放；记账进出场过渡；增加画布内容层以固定桌面手机外框；草稿确认后反向退出 |
-| `project/README.md` | 当前分支的 Web 验收入口与顺序 |
-| `wiki/2026-10-09/` 与 `wiki/2026-09-30-1/二版-UI设计文档.md` | 本轮范围、适配与性能记录、进出场时间表、验收事项 |
-| `AGENTS.md`、`.gitignore` | 更新待办并排除本地工具与缓存 |
+- [`project/android/app/src/main/java/com/wuhene/simpleledger/`](project/android/app/src/main/java/com/wuhene/simpleledger/)：原生 View 页面与转场、Android 13+ 系统返回回调、本地 SQLite 数据层、整数分金额计算、报告分享 Provider。
+- [`project/android/build-debug.ps1`](project/android/build-debug.ps1)：使用本机 JDK 17 与 Android SDK 35 直接编译、资源链接、D8、对齐、签名并核验 APK。保留 Gradle 8.13 工程、Wrapper 及 Android Studio 入口。
+- [`project/README.md`](project/README.md)：原生分支入口说明。Web 源码已从本需求分支移除，留在 `master-web`。
+- `wiki/2026-10-10/`、`AGENTS.md`：原生范围、验收点、测试状态和双主分支规则。
 
-## 验证
+## 已验证
 
-- `project/` 下 `npm test`：5 项通过；`node --check project/app.js` 通过。
-- 本机 Chrome 无头浏览器：320/360/390/480px 宽下首页、记账页、日期弹层无横向溢出；小屏保存键不再被底边裁掉。
-- 200% 字号模拟下，320/360/390px 的字段区可滚动，保存与日期确认键可见；日期弹层无内部溢出。模拟环境同时开启减少动态效果。
-- 10 年/10 万笔 IndexedDB 合成数据：本机冷载入到首页按钮约 958ms，年统计同步处理和渲染约 4ms；详见当前 Wiki 的测试记录。Android 真机性能仍待验证。
-- 320px 宽日期格约 42px；360px 为 48px。320px 手感待用户验收。
-- 用户反馈修复后，Chrome 390×844 下滚动条计算样式为 `none`，200% 字号的字段区仍能滚动 100px；“记一笔”没有共享元素形变，页面无脚本异常；业务测试 5 项通过。
-- 卡片动画再调整后，Chrome 390×844 手机视口与 1100×950 桌面预览的中途、结束画面已检查：页面从底部覆盖，旧页淡出，桌面手机外框静止；统计→明细→记一笔→日期弹层→输入保存流程通过；320–480px 与 200% 字号布局复验通过，无脚本异常。
-- 取消反向动画在上述两种视口检查中途与结束画面：记账卡片下滑、来源页显现、外框静止。无草稿直接返回；输入金额后先显示放弃确认，关闭弹层可保留 `¥ 1` 草稿，确认放弃后返回；减少动态效果模拟下直接返回。均无脚本异常。
+- `project/android/build-debug.ps1` 成功；`apksigner verify --verbose` 显示 v2/v3 签名通过；`aapt dump badging` 确认包名、版本、最低/目标 SDK、启动 Activity 和图标。
+- 本地 JVM 金额规则冒烟测试通过：加减表达式、金额上限、非法小数和结果、闰日、跨年月份。
+- 最新 APK SHA-256：`FC4F6FE230C1BAAC3C1110FEA867A661D98AFA345C0958D7FFCA1BA550F14D3A`。后续代码或 APK 变更必须重新记录哈希。
+- Gradle 构建在本机 JDK 17/21 均于启动 Daemon 前报 `Unable to establish loopback connection`。直接 SDK 构建脚本成功；Android Studio/Gradle 在标准环境仍需复验。
+- Android 35 x86_64 模拟器镜像和 AVD 已安装，但启动提示本机缺 Android Emulator hypervisor driver。没有设备安装、实际页面截图、返回手势或 10 万笔性能结论。
 
 ## 未决与接手动作
 
-1. Web 二版已通过用户验收，`2026-10-09` 的代码、Wiki、交接与待办一起合入 `master` 并推送。需要查看 Web 时在 `project/` 运行 `python -m http.server 4173 --bind 127.0.0.1`，打开 `http://127.0.0.1:4173/`。
-2. 从更新后的 `master` 创建 2026-10-10 安卓需求分支与同名 Wiki；原生页面不能以 WebView 承载，完成 APK 后在该分支供用户验收，用户未验收前不合回 `master`。
-3. Android 系统返回先关闭输入法/弹层，再退出二级页；退出有改动的记账草稿须确认。系统 Home 保持 Android 默认回桌面行为。
-4. 旧软件导入缺实际导出样本；云同步、多账本和资产账户明细不在本轮。
+1. 在 Android 8.0+ 真机或有硬件加速的模拟器安装 APK，按当前 Wiki 的设备验收清单测试关键路径，特别是系统返回、记账日期、JSON 往返和报告分享。发现问题仍在 `2026-10-10` 修复并推送。
+2. 验证 320dp 小屏、系统大字号、导航栏安全区及 10 年/10 万笔数据的启动和统计耗时。设备测试之前保持状态“待验证”。
+3. 用户明确验收本次 Android 需求后，合并 `2026-10-10` 到 `master` 并推送；不要自行合并。Web 新需求只从 `master-web` 开分支。
+4. 本机 Debug 签名密钥在被 Git 忽略的 `.tools/debug.keystore`。换机器重建可能无法覆盖安装旧 Debug APK；更新前让用户先导出 JSON 备份。
+5. 旧软件导入缺导出样本；云同步、多账本和资产账户明细不在本轮。
 
 ## 持续交接规则
 
-每次开发改动都更新本文件，写清分支、改动文件、验证、风险和下一步；同时更新 `AGENTS.md` 待办状态及对应 Wiki，并与代码一起提交推送。
+每次开发改动都更新本文件，写清分支、改动文件、验证、风险和下一步；同步更新 `AGENTS.md` 待办状态及对应 Wiki，并与代码一起提交推送。
