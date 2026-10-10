@@ -662,21 +662,28 @@ function withViewTransition(change) {
   }
 }
 let entryCoverTransition;
-function openEntryCover() {
+function entryCover(direction, change) {
   if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    beginEntry();
+    change(false);
     return;
   }
-  document.documentElement.classList.add("entry-opening");
-  const transition = document.startViewTransition(() => beginEntry(null, true));
+  document.documentElement.classList.remove("entry-opening", "entry-closing");
+  document.documentElement.classList.add(direction);
+  const transition = document.startViewTransition(() => change(true));
   entryCoverTransition = transition;
   const cleanup = () => {
     if (entryCoverTransition === transition) {
-      document.documentElement.classList.remove("entry-opening");
+      document.documentElement.classList.remove(direction);
       entryCoverTransition = null;
     }
   };
   transition.finished.then(cleanup, cleanup);
+}
+function openEntryCover() {
+  entryCover("entry-opening", (nativeTransition) => beginEntry(null, nativeTransition));
+}
+function closeEntryCover() {
+  entryCover("entry-closing", (nativeTransition) => navigate(state.entryOrigin, nativeTransition ? "" : "motion-fade"));
 }
 let toastTimer;
 function toast(msg) {
@@ -762,7 +769,7 @@ function back() {
       });
       return;
     }
-    navigate(state.entryOrigin);
+    closeEntryCover();
     return;
   }
   const targets = {
@@ -1480,7 +1487,7 @@ async function handleAction(el) {
       case "modal-confirm": {
         const m = state.modal;
         closeModal();
-        if (m.target === "discard") navigate(state.entryOrigin);
+        if (m.target === "discard") closeEntryCover();
         if (m.target === "delete-entry") await deleteEntry();
         if (m.target === "remove-budget") {
           await removeBudget(state.month);
