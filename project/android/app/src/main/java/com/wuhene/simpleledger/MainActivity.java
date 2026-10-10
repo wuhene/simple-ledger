@@ -103,10 +103,10 @@ public final class MainActivity extends Activity {
     private String monthEnd(String m) { return YearMonth.parse(m).atEndOfMonth().toString(); }
 
     private void render() {
-        host.removeAllViews(); entryCard = null;
+        host.removeAllViews();
         LinearLayout shell = column(); shell.setBackgroundColor(BG); host.addView(shell, new FrameLayout.LayoutParams(-1, -1));
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setVerticalScrollBarEnabled(false); shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        LinearLayout body = column(); body.setPadding(0, dp(20), 0, dp(24)); scroll.addView(body);
+        LinearLayout body = column(); body.setPadding(0, dp(isMain() ? 8 : 20), 0, dp(24)); scroll.addView(body);
         switch (page.name) {
             case "home": renderHome(body); break;
             case "stats": renderStats(body); break;
@@ -123,12 +123,26 @@ public final class MainActivity extends Activity {
             case "achievements": renderAchievements(body); break;
         }
         if (isMain()) renderTabs(shell);
-        if (ValueAnimator.areAnimatorsEnabled()) { shell.setAlpha(0f); shell.setTranslationY(dp(8)); shell.animate().alpha(1f).translationY(0).setDuration(180).setInterpolator(new DecelerateInterpolator()).start(); }
     }
     private void renderTabs(LinearLayout shell) {
-        LinearLayout nav = row(); nav.setBackgroundColor(WHITE); nav.setPadding(dp(10), dp(5), dp(10), dp(5));
-        String[] names = {"home", "stats", "entry", "tools", "me"}, labels = {"⌂\n明细", "▥\n统计", "+\n记一笔", "▤\n工具", "○\n我的"};
-        for (int i = 0; i < 5; i++) { final String n = names[i]; TextView b = text(labels[i], 12, page.name.equals(n) || n.equals("entry") ? GREEN : MUTED, page.name.equals(n) || n.equals("entry")); b.setGravity(Gravity.CENTER); b.setMinHeight(dp(55)); nav.addView(b, new LinearLayout.LayoutParams(0, -2, 1)); b.setOnClickListener(v -> { if (n.equals("entry")) openEntry(null); else tab(n); }); }
+        LinearLayout nav = row(); nav.setBackgroundColor(WHITE); nav.setPadding(dp(8), dp(5), dp(8), dp(5));
+        String[] names = {"home", "stats", "entry", "tools", "me"};
+        String[] icons = {"⌂", "▥", "+", "▤", "○"};
+        String[] labels = {"明细", "统计", "记一笔", "工具", "我的"};
+        for (int i = 0; i < names.length; i++) {
+            final String target = names[i]; boolean entry = target.equals("entry"); boolean active = page.name.equals(target);
+            LinearLayout tab = column(); tab.setGravity(Gravity.CENTER); tab.setContentDescription(labels[i]);
+            TextView iconView = text(icons[i], entry ? 30 : 25, entry ? WHITE : active ? GREEN : MUTED, true);
+            iconView.setGravity(Gravity.CENTER);
+            if (entry) { iconView.setBackground(shape(GREEN, 19)); iconView.setElevation(dp(3)); tab.addView(iconView, lp(54, 54)); }
+            else tab.addView(iconView, lp(38, 35));
+            TextView labelView = text(labels[i], 14, entry || active ? GREEN : MUTED, entry || active);
+            labelView.setGravity(Gravity.CENTER); tab.addView(labelView, lp(-1, -2));
+            tab.setMinimumHeight(dp(80));
+            LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, -2, entry ? 1.25f : 1f);
+            nav.addView(tab, tabParams);
+            tab.setOnClickListener(v -> { if (target.equals("entry")) openEntry(null); else if (!page.name.equals(target)) tab(target); });
+        }
         shell.addView(nav, lp(-1, -2));
     }
     private void monthSelector(LinearLayout body) {
@@ -147,7 +161,7 @@ public final class MainActivity extends Activity {
     }
 
     private void renderHome(LinearLayout body) {
-        header(body, "每天记一点，心里更有数", "简账"); monthSelector(body);
+        monthSelector(body);
         LedgerDb.Totals totals = db.totals(month + "-01", monthEnd(month)); totalCard(body, totals, "本月结余");
         long budget = db.budget(month); LinearLayout budgetCard = card(); budgetCard.addView(text("本月预算", 13, MUTED, false)); space(budgetCard, 5); budgetCard.addView(text(budget == 0 ? "设置预算，花钱更有数" : money(budget) + "  ·  已用 " + money(totals.expense), 17, DARK, true)); budgetCard.setOnClickListener(v -> navigate("budget", null)); addCard(body, budgetCard);
         LinearLayout heading = row(); padding(heading, 24, 6); heading.addView(text("账目明细", 20, DARK, true), new LinearLayout.LayoutParams(0, -2, 1)); heading.addView(ghost("记一笔  +", () -> openEntry(null))); body.addView(heading); space(body, 8);
@@ -188,7 +202,7 @@ public final class MainActivity extends Activity {
         LocalDate today = LocalDate.now(); if (end.isAfter(today)) end = today; return new String[]{start.toString(), end.toString()};
     }
     private void renderStats(LinearLayout body) {
-        header(body, "看见收支的去向", "统计"); LinearLayout kinds = row(); padding(kinds, 18, 3); String[] keys = {"week", "month", "year"}, labels = {"周", "月", "年"};
+        LinearLayout kinds = row(); padding(kinds, 18, 3); String[] keys = {"week", "month", "year"}, labels = {"周", "月", "年"};
         for (int i = 0; i < 3; i++) { final String k = keys[i]; TextView b = button(labels[i], statsKind.equals(k), () -> { statsKind = k; render(); }); kinds.addView(b, new LinearLayout.LayoutParams(0, dp(42), 1)); } body.addView(kinds);
         LinearLayout period = row(); padding(period, 18, 2); period.addView(ghost("‹", () -> statsPeriod(-1)), lp(48, 48)); TextView label = text(statsBounds()[0] + "  —  " + statsBounds()[1], 14, DARK, true); label.setGravity(Gravity.CENTER); period.addView(label, new LinearLayout.LayoutParams(0, dp(48), 1)); TextView next = ghost("›", () -> statsPeriod(1)); next.setEnabled(statsBounds()[1].compareTo(LedgerMath.today()) < 0); next.setAlpha(next.isEnabled() ? 1 : .3f); period.addView(next, lp(48, 48)); body.addView(period);
         String[] bounds = statsBounds(); LedgerDb.Totals totals = db.totals(bounds[0], bounds[1]); totalCard(body, totals, "本期结余");
@@ -229,7 +243,6 @@ public final class MainActivity extends Activity {
         }
     }
     private void renderTools(LinearLayout body) {
-        header(body, "掌握每个月的节奏", "工具");
         menu(body, "账单", "月度与年度收支报告", () -> navigate("bills", null));
         menu(body, "月总预算", "设置预算，查看已用与剩余", () -> navigate("budget", null));
         menu(body, "资产概览", "手动维护资产与负债", () -> navigate("assets", null));
@@ -286,7 +299,7 @@ public final class MainActivity extends Activity {
     }
 
     private void renderMe(LinearLayout body) {
-        header(body, "把生活记得更清楚", "我的"); menu(body, "分类管理", "调整分类名称与显示状态", () -> navigate("categories", null)); menu(body, "记账成就", "看看你记录了多少天", () -> navigate("achievements", null)); menu(body, "设置与备份", "金额隐藏、本地导出与恢复", () -> navigate("settings", null));
+        menu(body, "分类管理", "调整分类名称与显示状态", () -> navigate("categories", null)); menu(body, "记账成就", "看看你记录了多少天", () -> navigate("achievements", null)); menu(body, "设置与备份", "金额隐藏、本地导出与恢复", () -> navigate("settings", null));
     }
     private void moneyDialog(String title, long current, boolean allowZero, java.util.function.LongConsumer save) {
         EditText field = new EditText(this); field.setSingleLine(true); field.setInputType(8194); field.setText(LedgerMath.money(current).replace(",", "")); field.selectAll(); LinearLayout wrap = column(); padding(wrap, 24, 8); wrap.addView(field);
@@ -403,9 +416,11 @@ public final class MainActivity extends Activity {
         LocalDate d = LocalDate.parse(draft.businessDate); DatePickerDialog picker = new DatePickerDialog(this, (view, y, m, day) -> { preserveNote(); draft.businessDate = LocalDate.of(y, m + 1, day).toString(); dateView.setText("日期  " + draft.businessDate); }, d.getYear(), d.getMonthValue() - 1, d.getDayOfMonth());
         picker.getDatePicker().setMinDate(-2208988800000L); picker.getDatePicker().setMaxDate(System.currentTimeMillis()); picker.setButton(DatePickerDialog.BUTTON_NEUTRAL, "今天", (dialog, which) -> { preserveNote(); draft.businessDate = LedgerMath.today(); dateView.setText("日期  " + draft.businessDate); }); picker.show();
     }
-    private void saveDraft() { if (saving || entryClosing) return; saving = true; try { preserveNote(); draft.note = draft.note.trim(); draft.amountMinor = LedgerMath.expressionMinor(expression); db.saveEntry(draft); closeEntry(true); success("已保存"); } catch (Exception e) { error(e); } finally { saving = false; } }
+    private void saveDraft() { if (saving || entryClosing) return; saving = true; try { preserveNote(); draft.note = draft.note.trim(); draft.amountMinor = LedgerMath.expressionMinor(expression); db.saveEntry(draft); closeEntry(true); } catch (Exception e) { error(e); } finally { saving = false; } }
     private void closeEntry(boolean saved) {
-        if (entryCard == null || entryClosing) return; entryClosing = true; FrameLayout card = entryCard; Runnable finish = () -> { root.removeView(card); entryCard = null; draft = null; if (saved) render(); };
+        if (entryCard == null || entryClosing) return; entryClosing = true; FrameLayout card = entryCard;
+        if (saved) render();
+        Runnable finish = () -> { root.removeView(card); entryCard = null; draft = null; if (saved) success("已保存"); };
         if (ValueAnimator.areAnimatorsEnabled()) card.animate().translationY(root.getHeight()).setDuration(270).setInterpolator(new DecelerateInterpolator()).setListener(new AnimatorListenerAdapter() { @Override public void onAnimationEnd(Animator a) { finish.run(); } }).start(); else finish.run();
     }
     private void backPage() { if (!history.isEmpty()) page = history.pop(); else page = new Page("home", null); render(); }
