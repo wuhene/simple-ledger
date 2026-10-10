@@ -1,6 +1,6 @@
 # 简账项目交接文档
 
-更新：2026-10-10 · 当前需求分支：`2026-10-10-1` · 状态：Web 已验收；Android 导航与记账动效调整待设备复验
+更新：2026-10-10 · 当前需求分支：`2026-10-10-1` · 状态：Web 已验收；Android 导航、动效和视觉对齐待设备复验
 
 ## 接手先读
 
@@ -11,7 +11,7 @@
 ## 当前结构
 
 - [`project/web/`](project/web/)：已由用户验收的固定手机画布 Web 二版。浏览器账本保存在当前地址的 IndexedDB。进入此目录运行 `python -m http.server 4173 --bind 127.0.0.1`，打开 `http://127.0.0.1:4173/`。
-- [`project/android/`](project/android/)：原生 Android View + SQLite 工程；[`SimpleLedger-debug.apk`](project/android/SimpleLedger-debug.apk) 是 `0.1.1` 调试签名包，最低 Android 8.0。Web 数据不会自动进入 App，可用 JSON 备份迁移。
+- [`project/android/`](project/android/)：原生 Android View + SQLite 工程；[`SimpleLedger-debug.apk`](project/android/SimpleLedger-debug.apk) 是 `0.1.2` 调试签名包，最低 Android 8.0。Web 数据不会自动进入 App，可用 JSON 备份迁移。
 - `master` 同时保存两套代码和全部 Wiki。按用户最新要求，`master-web` 已删除；已有日期需求分支保留用于历史与后续验收反馈。
 - Android 代码由 `2026-10-10` 需求分支整合到 `master` 是用户要求的目录/主线调整，**不代表 Android 已通过真机验收**。Android 反馈仍可在该需求分支修复，合入前核对主线最新状态。
 
@@ -19,7 +19,8 @@
 
 - 用户已试用上一版 Android APK，要求底部入口放大、中央“记一笔”更突出、四主 Tab 顶部说明/标题移除、Tab 无过渡、保存后卡片下滑且底层刷新不闪。本次只修改 Android，Web 不变。
 - `project/android/app/src/main/java/com/wuhene/simpleledger/MainActivity.java`：导航图标与文字分别布局；主页面内容上移；取消整页淡入；保存时卡片覆盖下先更新底层页面，再下滑移除卡片。
-- `project/android/app/build.gradle` 和 `project/android/build-debug.ps1`：版本升到 `versionCode=2`、`versionName=0.1.1`。新需求、实现和设备复验清单在 `wiki/2026-10-10-1/`；`AGENTS.md` 同步待办状态。
+- 用户后续指出 Android 与已验收 Web 的视觉差异大；继续修改同一分支的 `MainActivity.java`：白色汇总卡和浅绿摘要、日期分组明细、原生绘制图标、带图标菜单、分段切换与分类格、金额日期卡和独立保存按钮；备注输入时隐藏数字键区。Web 源码未修改。
+- `project/android/app/build.gradle` 和 `project/android/build-debug.ps1`：版本升到 `versionCode=3`、`versionName=0.1.2`。新需求、实现和设备复验清单在 `wiki/2026-10-10-1/`；`AGENTS.md` 同步待办状态。
 
 ## 先前结构调整
 
@@ -30,8 +31,8 @@
 ## 验证与限制
 
 - `project/web/` 移动后执行 `npm test`，5 项通过；`node --check app.js` 通过。此前 Web 二版浏览器交互和小屏验收记录见 `wiki/2026-10-09/进度与测试.md`。
-- 本次 Android `build-debug.ps1` 编译成功，`apksigner` v2/v3 校验通过；`aapt dump badging` 确认包名、版本 `2 / 0.1.1`、最低 API 26。APK SHA-256：`6CDE5C7E44526FDBE160B0D7AADEEC8B27D9916F27430FD3E7D9D2D668464705`。
-- 本机 Gradle 启动曾遇到 Java 本地套接字错误，直接 SDK 构建脚本可用；Android 35 模拟器缺硬件加速驱动。本次 `adb devices` 无连接设备。用户已经安装试用上一版并提出反馈；当前版本的布局、动效、返回、覆盖安装与 10 万笔性能尚待设备复验。
+- 本次 Android `build-debug.ps1` 编译成功，`apksigner` v2/v3 校验通过；`aapt dump badging` 确认包名、版本 `3 / 0.1.2`、最低 API 26。APK SHA-256：`225F78D83EC53F1095A533310754E448723E8931D7F7A5C945EC36840BC08803`。
+- 本机 Gradle 启动曾遇到 Java 本地套接字错误，直接 SDK 构建脚本可用。本次 `adb devices` 无连接设备。x86_64 模拟器在无硬件加速的软件渲染模式下启动即退出；ARM64 镜像被模拟器判定与 x86_64 主机不兼容。未获得真实 Android 截图或运行结果。用户已试用上一版并反馈；当前版本的布局、动效、返回、覆盖安装与 10 万笔性能尚待设备复验。
 - Debug 签名密钥仅在被 Git 忽略的 `.tools/debug.keystore`；换机器重建的 Debug 包可能不能覆盖安装。更新前先导出 JSON 备份。
 
 ## 下一步
