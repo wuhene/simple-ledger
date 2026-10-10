@@ -4,7 +4,7 @@
 
 ## 依据与范围
 
-用户已验收 Web 二版。原生 App 按 `wiki/2026-09-30-init/记账App-PRD.md` 的业务规则、`wiki/2026-09-30-1/` 的二版视觉及 `wiki/2026-10-09/` 的最终交互实现。原生代码和可安装 APK 位于 `project/android/`；核心页面使用 Android View 和本地 SQLite，不嵌入 WebView。Web 基线在 `master-web`，原生主分支为 `master`。
+用户已验收 Web 二版。原生 App 按 `wiki/2026-09-30-init/记账App-PRD.md` 的业务规则、`wiki/2026-09-30-1/` 的二版视觉及 `wiki/2026-10-09/` 的最终交互实现。原生代码和可安装 APK 位于 `project/android/`；核心页面使用 Android View 和本地 SQLite，不嵌入 WebView。Web 代码位于 `project/web/`，两套工程统一保留在 `master`。
 
 本需求覆盖四个主导航（明细、统计、工具、我的）、记账与详情、统计与分类明细、账单和报告、预算、资产、分类管理、设置与本地备份恢复。金额以整数分保存，业务日期不随时区漂移，分类历史引用保留。浏览器 IndexedDB 数据不会自动进入 APK；通过经过校验的 JSON 备份可迁移。安装与实际迁移仍需 Android 设备验证。
 
@@ -19,7 +19,7 @@
 
 - Java 17 源码，Android 原生 View，SQLiteOpenHelper；最低 Android 8.0（API 26），编译和目标 API 35。构建使用 Android Gradle Plugin 8.13、Gradle 8.13、Build Tools 35.0.0 与已安装的 Android 35 SDK。版本匹配依据 [Android 官方兼容表](https://developer.android.com/build/releases/agp-8-13-0-release-notes)。
 - 本地单账本，无账号、网络权限、WebView、自动读账单或云同步。Android 系统文件选择与保存用于 JSON 备份；恢复先验证结构与引用，再以事务替换。报告图片走系统分享面板。
-- `master` 用于原生主线，`master-web` 用于 Web 主线。用户验收本需求分支后才合回 `master`。
+- Web 与 Android 共用 `master` 主线，分别保存在 `project/web/` 与 `project/android/`。用户要求先统一目录和主线，因此本需求源码已整合到 `master`；Android 设备功能验收仍待完成，不以结构合并代替验收。
 
 ## 验收点
 
