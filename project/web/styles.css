@@ -1158,11 +1158,15 @@ body::-webkit-scrollbar,
 
 /* Compact ledger and stats. */
 #phone[data-page="stats"] .top { height: 58px; min-height: 58px; }
-#phone[data-page="home"] .content { padding-top: 8px; background: var(--subtle); }
+#phone[data-page="home"] .content { padding: 0 0 106px; background: var(--surface); }
 #phone[data-page="stats"] .content { padding-top: 8px; }
 .ledger-month {
-  border-radius: 12px;
+  padding: 8px 20px 15px;
+  background: var(--top-surface);
+  color: var(--top-ink);
 }
+:root[data-theme="amber"] .ledger-month { background: var(--action); }
+.ledger-rows { padding-inline: 20px; }
 .ledger-month .month-period { margin: 0; gap: 1px; }
 .ledger-period { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
 .ledger-period .month-period { flex: 1; min-width: 0; }
@@ -1179,7 +1183,6 @@ body::-webkit-scrollbar,
   background: transparent;
   color: var(--brand);
 }
-.ledger-period .top-icon:is(:hover, :focus-visible) { background: var(--soft); }
 .ledger-period .top-icon svg { width: 19px; height: 19px; }
 .ledger-month .month-period > button {
   background: transparent;
@@ -1187,7 +1190,6 @@ body::-webkit-scrollbar,
   min-height: 44px;
   border-radius: 9px;
 }
-.ledger-month .month-period > button:not(:disabled):is(:hover, :focus-visible) { background: var(--soft); }
 .ledger-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1216,7 +1218,7 @@ body::-webkit-scrollbar,
 .ledger-rows .group-head {
   margin: 0;
   padding: 6px 8px;
-  background: var(--subtle);
+  border-bottom: 1px solid var(--line);
   font-size: .82rem;
   align-items: baseline;
 }
@@ -1497,12 +1499,7 @@ body::-webkit-scrollbar,
 .top:not(.entry-top) .top-icon,
 .top.assistant-top .ai-entry:is(:hover, :focus-visible) { background: var(--top-chip); color: var(--top-ink); }
 :root[data-theme="amber"] #phone[data-page="stats"] .top .top-icon { background: var(--soft); }
-.ledger-month {
-  background: var(--top-surface);
-  color: var(--top-ink);
-}
 .ledger-month :is(.period button, .period button svg, .top-icon) { color: var(--top-ink); }
-.ledger-period .top-icon { background: transparent; }
 .ledger-month .month-period > button:not(:disabled):is(:hover, :focus-visible) { background: var(--top-chip); }
 .ledger-period .top-icon:is(:hover, :focus-visible) { background: var(--top-chip); }
 .primary:not(.danger), .fab, .nav-plus {
