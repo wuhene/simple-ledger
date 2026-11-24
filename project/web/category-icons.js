@@ -41,7 +41,7 @@ export const categoryIconPaths = {
 
 // Fill enclosed regions behind the original strokes so interior details remain readable.
 const filledParts = {
-  utensils: [2], "shopping-bag": [0], package: [0], carrot: [0], apple: [0], cookie: [0],
+  utensils: [2], carrot: [0], apple: [0], cookie: [0],
   dumbbell: [1, 4], "gamepad-2": [4], smartphone: [0], shirt: [0], paintbrush: [1],
   house: [1], armchair: [1], accessibility: [0], users: [1], plane: [0],
   "car-front": [3], cross: [0], "book-open": [1], "graduation-cap": [0],
@@ -51,6 +51,8 @@ const filledParts = {
 };
 const partialFills = {
   utensils: '<path d="M3 7h8v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  "shopping-bag": '<path d="M3 7h18v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  package: '<path d="m4 8 8 4.5 8-4.5v8l-8 4.8L4 16z"/>',
   baby: '<ellipse cx="12" cy="14" rx="6.5" ry="5.5"/>',
   "bus-front": '<path d="M4 11h16v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
   cigarette: '<rect x="2" y="12" width="5" height="4" rx="1"/>',

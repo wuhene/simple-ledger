@@ -202,7 +202,7 @@ function categoryGraphic(category) {
 }
 function categoryIcon(category) {
   const graphic = categoryGraphic(category);
-  return svgIcon(`<g class="category-fill" stroke="none">${categoryIconFills[graphic]}</g>${categoryIconPaths[graphic]}`);
+  return svgIcon(`<g class="category-fill" data-graphic="${graphic}" stroke="none">${categoryIconFills[graphic]}</g>${categoryIconPaths[graphic]}`);
 }
 function uiIcon(key) { return svgIcon(uiPaths[key]); }
 function seg(items, value, action) {
@@ -228,7 +228,7 @@ function home() {
   return `<h1 class="visually-hidden">明细</h1><section class="ledger-month" aria-label="月度账本"><div class="ledger-period">${periodPicker(state.month)}${amountVisibilityButton()}</div>
     <div class="ledger-summary"><div class="ledger-balance"><span>结余</span><strong>${formatYen(t.balance)}</strong></div>
     <div><span>收入</span><strong class="income">${formatYen(t.income)}</strong></div>
-    <div><span>支出</span><strong>${formatYen(t.expense)}</strong></div></div></section>
+    <div><span>支出</span><strong class="expense">${formatYen(t.expense)}</strong></div></div></section>
     <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="ledger-count">${saved}<span class="micro">${rows.length} 笔</span></span></div>
     ${rows.length ? entryRows(rows) : empty(state.data.entries.length ? "这个月暂无记录" : "还没有记录", "从第一笔收入或支出开始。", "new-entry", "记第一笔")}</section>`;
 }
@@ -265,17 +265,29 @@ function categoryRanks(entries, type, click = true) {
     return `<${tag} class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span class="rank-label"><span class="ico category-icon">${categoryIcon(r.category)}</span>${E(r.category.name)}</span><span class="rank-value"><strong>${formatYen(r.amountMinor)}</strong><span class="micro">${r.percent.toFixed(1)}%</span></span></div><div class="bar" aria-hidden="true"><i style="width:${r.percent}%"></i></div></${tag}>`;
   }).join("")}</div>`;
 }
-function chart(points) {
+function chart(points, barType) {
   if (!points.length || points.every((p) => p.value === 0))
     return empty("暂无趋势数据", "这个周期没有可统计的记录。");
   const max = Math.max(1, ...points.map((p) => p.value));
-  const w = 320,
-    h = 130,
-    coords = points.map(
-      (p, i) =>
-        `${points.length === 1 ? w / 2 : (i / (points.length - 1)) * w},${h - (p.value / max) * 105}`,
-    );
-  return `<svg class="trend" viewBox="0 0 320 150" role="img" aria-label="趋势图"><line x1="0" y1="130" x2="320" y2="130"/><line x1="0" y1="68" x2="320" y2="68"/><polyline points="${coords.join(" ")}"/>${points.map((p, i) => `<circle cx="${points.length === 1 ? w / 2 : (i / (points.length - 1)) * w}" cy="${h - (p.value / max) * 105}" r="${i === state.trendPoint ? 5 : 3}" data-action="trend-point" data-index="${i}"><title>${E(p.key)} ${formatYen(p.value)}</title></circle>`).join("")}</svg><div class="chart-labels"><span>${E(points[0].key)}</span><span>${E(points.at(-1).key)}</span></div>${state.trendPoint !== null && points[state.trendPoint] ? `<p class="micro">${E(points[state.trendPoint].key)} · ${formatYen(points[state.trendPoint].value)}</p>` : ""}<details><summary class="plain">查看图表数据</summary>${points.map((p) => `<div class="metric micro"><span>${E(p.key)}</span><strong>${formatYen(p.value)}</strong></div>`).join("")}</details>`;
+  const w = 320, h = 130;
+  const bars = Boolean(barType), slot = w / points.length, barWidth = Math.min(18, slot * .55);
+  const positions = points.map((p, i) => ({
+    x: bars ? (i + .5) * slot : points.length === 1 ? w / 2 : (i / (points.length - 1)) * w,
+    y: h - (p.value / max) * 105,
+  }));
+  const marks = positions.map(({ x, y }, i) => {
+    const p = points[i];
+    const active = i === state.trendPoint;
+    const attrs = `data-action="trend-point" data-index="${i}"`;
+    const title = `<title>${E(p.key)} ${formatYen(p.value)}</title>`;
+    if (bars) {
+      if (!p.value) return "";
+      return `<g class="trend-bar ${active ? "selected" : ""}" ${attrs}>${title}<rect x="${i * slot}" y="0" width="${slot}" height="${h}" fill="transparent"/><rect class="trend-column" x="${x - barWidth / 2}" y="${Math.min(y, h - 1)}" width="${barWidth}" height="${Math.max(1, h - y)}" rx="2"/></g>`;
+    }
+    return `<circle cx="${x}" cy="${y}" r="${active ? 5 : 3}" ${attrs}>${title}</circle>`;
+  }).join("");
+  const line = bars ? "" : `<polyline points="${positions.map(({ x, y }) => `${x},${y}`).join(" ")}"/>`;
+  return `<svg class="trend ${barType === EXPENSE ? "trend-expense" : ""}" viewBox="0 0 320 150" role="img" aria-label="趋势图"><line x1="0" y1="130" x2="320" y2="130"/><line x1="0" y1="68" x2="320" y2="68"/>${line}${marks}</svg><div class="chart-labels"><span>${E(points[0].key)}</span><span>${E(points.at(-1).key)}</span></div>${state.trendPoint !== null && points[state.trendPoint] ? `<p class="micro">${E(points[state.trendPoint].key)} · ${formatYen(points[state.trendPoint].value)}</p>` : ""}<details><summary class="plain">查看图表数据</summary>${points.map((p) => `<div class="metric micro"><span>${E(p.key)}</span><strong>${formatYen(p.value)}</strong></div>`).join("")}</details>`;
 }
 function stats() {
   const b = periodBounds(state.statsPeriod, state.statsAnchor),
@@ -289,7 +301,7 @@ function stats() {
   return `<div class="stats-toolbar"><div class="stats-range"><button data-action="stats-shift" data-delta="-1" aria-label="上一周期" ${b.start <= "1900-01-01" ? "disabled" : ""}>${uiIcon("chevronLeft")}</button><strong title="${E(b.start + " 至 " + b.end)}">${E(label)}</strong><button data-action="stats-shift" data-delta="1" aria-label="下一周期" ${b.fullEnd >= localToday() ? "disabled" : ""}>${uiIcon("chevronRight")}</button></div><label class="stats-period-select"><span class="visually-hidden">统计周期</span><select id="statsPeriod" aria-label="统计周期">${[["week", "按周"], ["month", "按月"], ["year", "按年"]].map(([period, text]) => `<option value="${period}" ${state.statsPeriod === period ? "selected" : ""}>${text}</option>`).join("")}</select></label></div>
     <section class="card stats-chart-card" aria-label="${typeName(type)}趋势"><div class="stats-topline"><span class="eyebrow">${typeName(type)}趋势</span>${seg([[EXPENSE, "支出"], [INCOME, "收入"]], type, "stats-type")}</div>
     <div class="stats-value">${formatYen(value)}</div><p class="caption">日均 ${formatYen(days ? Math.round(value / days) : 0)} · ${days} 天</p>
-    ${value ? chart(points) : empty(`这个周期暂无${typeName(type)}`, "新增记录后显示趋势。")}</section><h2 class="heading">分类排行</h2>${categoryRanks(rows, type)}`;
+    ${value ? chart(points, type) : empty(`这个周期暂无${typeName(type)}`, "新增记录后显示趋势。")}</section><h2 class="heading">分类排行</h2><div class="${type === EXPENSE ? "expense-ranks" : ""}">${categoryRanks(rows, type)}</div>`;
 }
 function categoryDetail() {
   if (!state.filter) return "";
