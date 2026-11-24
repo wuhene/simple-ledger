@@ -1,7 +1,7 @@
 import { initialCategories, SCHEMA_VERSION, validateLedger } from "./model.js";
 
 const DB_NAME = "simple-ledger";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbPromise;
 
 function request(req) {
@@ -21,8 +21,10 @@ export function openDatabase() {
   if (!dbPromise)
     dbPromise = new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
+      req.onupgradeneeded = (event) => {
         const db = req.result;
+        db.createObjectStore("assistantSessions", { keyPath: "id" });
+        if (event.oldVersion !== 0) return;
         db.createObjectStore("entries", { keyPath: "id" });
         db.createObjectStore("categories", { keyPath: "id" });
         db.createObjectStore("budgets", { keyPath: "yearMonth" });
@@ -36,7 +38,10 @@ export function openDatabase() {
         );
         tx.objectStore("meta").put(null, "asset");
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        req.result.onversionchange = () => req.result.close();
+        resolve(req.result);
+      };
       req.onerror = () => reject(req.error);
       req.onblocked = () => reject(new Error("请关闭其他简账页面后重试"));
     });
@@ -113,11 +118,13 @@ export async function putMeta(key, value) {
   tx.objectStore("meta").put(value, key);
   await done(tx);
 }
-export async function replaceLedger(input) {
+export async function replaceLedger(input, clearSessions = false) {
   const data = validateLedger(input),
     db = await openDatabase();
+  const stores = ["entries", "categories", "budgets", "meta"];
+  if (clearSessions) stores.push("assistantSessions");
   const tx = db.transaction(
-    ["entries", "categories", "budgets", "meta"],
+    stores,
     "readwrite",
   );
   const entries = tx.objectStore("entries"),
@@ -132,6 +139,10 @@ export async function replaceLedger(input) {
   for (const b of data.budgets) budgets.put(b);
   meta.put(data.asset, "asset");
   meta.put(data.preferences, "preferences");
+  if (clearSessions) {
+    tx.objectStore("assistantSessions").clear();
+    meta.delete("activeAssistantSession");
+  }
   await done(tx);
 }
 export async function clearLedger() {
@@ -143,5 +154,23 @@ export async function clearLedger() {
     asset: null,
     preferences: { hideAmountsByDefault: false },
   };
-  await replaceLedger(empty);
+  await replaceLedger(empty, true);
+}
+
+export async function loadAssistantHistory() {
+  const db = await openDatabase();
+  const tx = db.transaction(["assistantSessions", "meta"], "readonly");
+  const result = await Promise.all([
+    request(tx.objectStore("assistantSessions").getAll()),
+    request(tx.objectStore("meta").get("activeAssistantSession")),
+    done(tx),
+  ]);
+  return { sessions: result[0], activeId: result[1] };
+}
+
+export async function saveAssistantSession(session) {
+  const db = await openDatabase();
+  const tx = db.transaction("assistantSessions", "readwrite");
+  tx.objectStore("assistantSessions").put(session);
+  await done(tx);
 }

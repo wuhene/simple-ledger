@@ -34,7 +34,6 @@ import {
   removeBudget,
   putMeta,
   replaceLedger,
-  clearLedger,
 } from "./storage.js";
 import { createAssistant } from "./assistant.js";
 
@@ -121,7 +120,11 @@ const assistant = createAssistant({
     if (scroll && state.page === "assistant") $(".content").scrollTop = $(".content").scrollHeight;
   },
   reload,
-  isOpen: () => ["assistant", "assistantSettings"].includes(state.page),
+  isOpen: () => ["assistant", "assistantSettings", "assistantHistory"].includes(state.page),
+  openChat: () => {
+    navigate("assistant");
+    $(".content").scrollTop = $(".content").scrollHeight;
+  },
 });
 
 function activeCategories(type, includeHidden = false) {
@@ -528,7 +531,8 @@ function assistantEntryHtml() {
     return '<button class="ai-entry" data-action="open-assistant" aria-label="打开 AI 助手">✦ AI</button>';
   }
   if (state.page === "assistant") {
-    return assistant.sessionButton() + '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
+    return '<button class="ai-entry" data-action="assistant-history" aria-label="历史会话">历史</button>' +
+      assistant.sessionButton() + '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
   }
   return "";
 }
@@ -551,6 +555,7 @@ function header() {
       settings: "设置与数据",
       assistant: "AI 助手",
       assistantSettings: "AI 助手设置",
+      assistantHistory: "历史会话",
     };
   return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${main ? `<button class="top-icon" data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${uiIcon(state.data.preferences.hideAmountsByDefault ? "eyeOff" : "eye")}</button>` : ""}${assistantEntryHtml()}</header>`;
 }
@@ -614,7 +619,7 @@ function modalHtml() {
       body = `<h2>关于简账</h2><p>简账 Web 功能验收版 · 数据仅保存在本机浏览器。</p><button class="primary" data-action="close-modal">关闭</button>`;
       break;
     case "clear":
-      body = `<h2>清空全部数据</h2><p class="danger">流水、分类调整、预算和资产都将删除。请先导出备份。</p><button class="outline" data-action="export">导出当前备份</button><label><input id="clearBacked" type="checkbox"> 我已保留备份，仍要清空</label><label for="clearPhrase">输入“清空账本”再次确认</label><input id="clearPhrase" class="field" placeholder="清空账本"><p id="clearError" class="error"></p><button class="primary" data-action="confirm-clear">确认清空</button><button class="outline" data-action="close-modal">取消</button>`;
+      body = `<h2>清空全部数据</h2><p class="danger">流水、分类调整、预算、资产和 AI 历史会话都将删除。请先导出备份。</p><button class="outline" data-action="export">导出当前备份</button><label><input id="clearBacked" type="checkbox"> 我已保留备份，仍要清空</label><label for="clearPhrase">输入“清空账本”再次确认</label><input id="clearPhrase" class="field" placeholder="清空账本"><p id="clearError" class="error"></p><button class="primary" data-action="confirm-clear">确认清空</button><button class="outline" data-action="close-modal">取消</button>`;
       break;
   }
   return `<div class="modalback ${m.entering ? "modal-enter" : ""}"><button class="modal-scrim" data-action="close-modal" aria-label="关闭弹层"></button><div class="modal ${m.kind === "pickDate" || m.kind === "pickMonth" ? "calendar-modal" : ""}" role="dialog" aria-modal="true" aria-label="${m.kind === "pickDate" ? "选择日期" : m.kind === "pickMonth" ? "选择月份" : "操作弹层"}"><span class="modal-handle" aria-hidden="true"></span>${body}</div></div>`;
@@ -644,6 +649,7 @@ function render() {
     settings,
     assistant: assistant.page,
     assistantSettings: assistant.configPage,
+    assistantHistory: assistant.historyPage,
   };
   const main = ["home", "stats", "tools", "mine"].includes(state.page);
   phone.innerHTML = `<div class="phone-screen">` +
@@ -810,6 +816,7 @@ function back() {
     settings: "mine",
     assistant: assistantOrigin,
     assistantSettings: assistantSettingsOrigin,
+    assistantHistory: "assistant",
   };
   navigate(targets[state.page] || "home");
 }
@@ -1476,7 +1483,7 @@ async function handleAction(el) {
           $("#clearError").textContent = "请确认备份并准确输入“清空账本”";
           break;
         }
-        await clearLedger();
+        await assistant.clearLocalData();
         state.modal = null;
         await reload();
         navigate("home");
@@ -1553,6 +1560,10 @@ phone.addEventListener("click", (e) => {
     navigate("assistantSettings");
     return;
   }
+  if (pageControl?.dataset.action === "assistant-history") {
+    navigate("assistantHistory");
+    return;
+  }
   if (pageControl && phone.contains(pageControl)) handleAction(pageControl);
 });
 phone.addEventListener("submit", assistant.submit);
@@ -1600,6 +1611,7 @@ $("#width390").addEventListener("click", () => {
 });
 try {
   state.data = await loadLedger();
+  await assistant.initHistory();
   for (const type of [EXPENSE, INCOME]) {
     const last = sortEntries(
       state.data.entries.filter((e) => e.type === type),

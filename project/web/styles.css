@@ -1006,6 +1006,10 @@ body::-webkit-scrollbar,
 .amount-editor::-webkit-scrollbar { display: none; }
 .ai-entry { font-weight: 700; flex: none; }
 .top .ai-entry { background: var(--soft); }
+.top .ai-entry { white-space: nowrap; }
+.ai-history .menu > span:first-child { min-width: 0; }
+.ai-history .menu strong { display: block; overflow-wrap: anywhere; }
+.ai-history .menu .micro { display: block; }
 .ai-chat { display: grid; gap: 9px; align-content: start; }
 .ai-chat .card { margin: 0; }
 .ai-bubble {

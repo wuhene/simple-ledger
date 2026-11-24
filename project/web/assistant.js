@@ -1,14 +1,16 @@
 import { EXPENSE, INCOME, categoryTotals, dayCount, entriesInBounds, localToday, money, shiftDate, sortEntries, totals } from "./model.js";
-import { putEntry, removeEntry } from "./storage.js";
+import { clearLedger, loadAssistantHistory, putEntry, putMeta, removeEntry, saveAssistantSession } from "./storage.js";
 import { validateIntent } from "./assistant-model.js";
 
 const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>';
 const typeName = type => type === INCOME ? "收入" : "支出";
 
-export function createAssistant({ getData, escape: E, render, reload, isOpen }) {
+export function createAssistant({ getData, escape: E, render, reload, isOpen, openChat }) {
   let config = { base: "", model: "", key: "", consent: false, shareSummary: false };
   let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
   let chat = [], previousInput = "";
+  let activeId = "", historyError = "";
+  const sessions = new Map();
   const say = (text, user = false) => {
     chat.push({ kind: "text", text, user });
   };
@@ -18,6 +20,77 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
   const displayMoney = minor => getData().preferences.hideAmountsByDefault ? "••••" : "¥" + money(minor);
   const available = () => getData().categories.filter(category => !category.hidden);
   const configured = () => Boolean(config.base && config.model && config.consent);
+
+  function restoreSession(id, session) {
+    activeId = id;
+    chat = session?.chat || [];
+    context = session?.context || null;
+    previousInput = session?.previousInput || "";
+    draft = session?.draft || null;
+    input = session?.input || "";
+  }
+
+  async function initHistory() {
+    try {
+      const stored = await loadAssistantHistory();
+      for (const session of stored.sessions) sessions.set(session.id, session);
+      const latest = stored.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      const id = stored.activeId || latest?.id || crypto.randomUUID();
+      restoreSession(id, sessions.get(id));
+    } catch {
+      activeId = crypto.randomUUID();
+      historyError = "无法读取历史会话。";
+    }
+  }
+
+  function saveHistory(operation) {
+    return operation.catch(() => {
+      if (!historyError) {
+        historyError = "会话暂时无法保存到浏览器。";
+        if (isOpen()) render(false);
+      }
+    });
+  }
+
+  function persistSession() {
+    if (!chat.length && !draft) return;
+    const firstMessage = chat.find(item => item.kind === "text" && item.user);
+    const session = structuredClone({ id: activeId, chat, context, draft, input, previousInput,
+      title: [...(firstMessage?.text || "新会话")].slice(0, 26).join(""),
+      updatedAt: new Date().toISOString() });
+    sessions.set(activeId, session);
+    return saveHistory(saveAssistantSession(session));
+  }
+
+  async function switchSession(id) {
+    if (id === activeId) return;
+    if (request) {
+      request.abort();
+      request = null;
+      busy = false;
+      say("本次请求已停止。");
+    }
+    busy = true;
+    try {
+      await persistSession();
+      await saveHistory(putMeta("activeAssistantSession", id));
+      const session = sessions.get(id);
+      restoreSession(id, session ? structuredClone(session) : null);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function clearLocalData() {
+    if (busy && !request) throw new Error("请等待记账操作完成后再清空数据。");
+    request?.abort();
+    if (request) busy = false;
+    request = null;
+    await clearLedger();
+    sessions.clear();
+    restoreSession(crypto.randomUUID(), null);
+    historyError = "";
+  }
 
   function configPage() {
     return '<form id="assistant-config" class="card ai-config">' +
@@ -135,11 +208,23 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     return button("new-session", "新会话", "ai-entry", busy && !request);
   }
 
+  function historyPage() {
+    const items = [...sessions.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return (historyError ? '<p role="status" class="error">' + E(historyError) + '</p>' : "") +
+      (items.length ? '<div class="list ai-history">' + items.map(item =>
+        '<button type="button" class="menu" data-assistant="restore-session" data-id="' + E(item.id) +
+        '"' + (busy && !request ? " disabled" : "") + '><span><strong>' + E(item.title) + '</strong><span class="micro">' +
+        E(new Date(item.updatedAt).toLocaleString("zh-CN")) + '</span></span><span class="chev">' +
+        (item.id === activeId ? "当前" : "›") + '</span></button>').join("") + '</div>' :
+        '<div class="card"><strong>暂无历史会话</strong><p class="micro">发送消息后，会话会保存在这个浏览器。</p></div>');
+  }
+
   function page() {
     return '<div class="ai-chat" aria-live="polite">' +
       (!configured() ? '<div class="card"><strong>先连接一个模型</strong><p class="micro">在设置中填写 API 地址和模型 ID，即可用 AI 记账或查账。</p></div>' :
         !chat.length ? '<div class="card"><strong>说一句，记账或查账</strong><p class="micro">例如「今天中午吃叉烧饭花了28元」。</p>' +
         '<div class="ai-actions">' + button("example-record", "试一句记账") + button("example-stats", "试查本月收支") + '</div></div>' : "") +
+      (historyError ? '<p role="status" class="error">' + E(historyError) + '</p>' : "") +
       chat.map(chatItem).join("") + draftCard() + '</div>' +
       '<form id="assistant-chat" class="ai-composer"><input aria-label="聊天消息" name="message" class="field" maxlength="600" autocomplete="off"' +
       ' placeholder="说一句，记账或查账" value="' + E(input) + '"' + (busy || !configured() ? " disabled" : "") + '><button class="primary"' +
@@ -213,6 +298,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     const currentRequest = new AbortController();
     request = currentRequest;
     busy = true;
+    persistSession();
     refresh();
     try {
       const intent = await callModel(settings, "interpret", text, currentRequest.signal);
@@ -265,6 +351,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       if (request === currentRequest) {
         request = null;
         busy = false;
+        persistSession();
         refresh();
       }
     }
@@ -291,6 +378,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       say(error.message || "账单保存失败，请重试。");
     } finally {
       busy = false;
+      persistSession();
       refresh();
     }
   }
@@ -298,16 +386,11 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
   async function act(control) {
     const action = control.dataset.assistant;
     if (action === "new-session" && (!busy || request)) {
-      if (draft && !window.confirm("开启新会话并放弃这笔未入账草稿？")) return;
-      request?.abort();
-      request = null;
-      busy = false;
-      input = "";
-      context = null;
-      previousInput = "";
-      draft = null;
-      chat = [];
+      await switchSession(crypto.randomUUID());
       refresh();
+    } else if (action === "restore-session" && (!busy || request) && sessions.has(control.dataset.id)) {
+      await switchSession(control.dataset.id);
+      openChat();
     } else if (action === "clear-config" && !testing) {
       config = { base: "", model: "", key: "", consent: false, shareSummary: false };
       status = "已清除配置。";
@@ -319,11 +402,13 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     } else if (action === "cancel" && !busy) {
       draft = null;
       say("已取消草稿。");
+      persistSession();
       refresh();
     } else if (action === "detail") {
       const report = chat.find(item => item.kind === "report" && item.id === control.dataset.id);
       if (report) {
         report.selected = report.selected === control.dataset.category ? "" : control.dataset.category;
+        persistSession();
         render(false);
       }
     } else if (action === "undo" && !busy) {
@@ -341,6 +426,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
         say(error.message || "撤销失败，请重试。");
       } finally {
         busy = false;
+        persistSession();
         if (isOpen()) render(false);
       }
     }
@@ -361,5 +447,5 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     if (field.form?.id === "assistant-draft" && draft) draft[field.name] = field.value;
   }
 
-  return { page, configPage, sessionButton, act, submit, onInput };
+  return { page, configPage, historyPage, initHistory, clearLocalData, sessionButton, act, submit, onInput };
 }
