@@ -6,7 +6,7 @@ const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>
 const typeName = type => type === INCOME ? "收入" : "支出";
 
 export function createAssistant({ getData, escape: E, render, reload, isOpen, openChat }) {
-  let config = { base: "", model: "", key: "", consent: false, shareSummary: false };
+  let config = { base: "", model: "", key: "" };
   let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
   let chat = [], previousInput = "";
   let activeId = "", historyError = "";
@@ -19,7 +19,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     style + '" data-assistant="' + action + '"' + (disabled ? " disabled" : "") + ">" + E(label) + "</button>";
   const displayMoney = minor => getData().preferences.hideAmountsByDefault ? "••••" : "¥" + money(minor);
   const available = () => getData().categories.filter(category => !category.hidden);
-  const configured = () => Boolean(config.base && config.model && config.consent);
+  const configured = () => Boolean(config.base && config.model);
 
   function restoreSession(id, session) {
     activeId = id;
@@ -98,11 +98,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       '<label>模型 ID<input class="field" name="model" maxlength="150" value="' + E(config.model) + '" placeholder="填服务商提供的模型 ID"></label>' +
       '<label>API Key<input class="field" name="key" type="password" autocomplete="off" maxlength="512" placeholder="' +
       (config.key ? "已设置 · 留空沿用" : "模型需要认证时填写") + '"></label>' +
-      '<label class="ai-consent"><input name="consent" type="checkbox"' + (config.consent ? " checked" : "") +
-      '>允许把输入及必要上下文发给此模型服务</label>' +
-      '<label class="ai-consent"><input name="shareSummary" type="checkbox"' + (config.shareSummary ? " checked" : "") +
-      '>允许模型使用支出汇总给个性化建议</label>' +
-      paragraph(E, "个性化建议仅使用支出总额和对比期汇总，不发送流水、分类或备注。关闭时本机仍可说明对比结果。配置在刷新前有效。") +
+      paragraph(E, "聊天会向此模型发送输入和必要上下文。给个性化建议时会用到支出汇总，原始流水和备注留在本机。配置在刷新前有效。") +
       '<div class="ai-actions"><button class="primary" name="action" value="save"' + (testing ? " disabled" : "") + '>保存设置</button>' +
       '<button class="outline" name="action" value="test"' + (testing ? " disabled" : "") + '>' + (testing ? "测试中…" : "测试连接") + '</button>' +
       button("clear-config", "清除配置", "plain", testing) + '</div><p role="status" class="micro">' + E(status) + '</p></form>';
@@ -255,15 +251,14 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     const fields = new FormData(form);
     const base = fields.get("base").trim(), key = fields.get("key").trim();
     const next = { base, model: fields.get("model").trim(),
-      key: key || (base === config.base ? config.key : ""), consent: fields.has("consent"),
-      shareSummary: fields.has("shareSummary") };
-    if (action === "test" && (!next.base || !next.model || !next.consent)) {
-      form.querySelector('[role="status"]').textContent = "请填写 API 地址和模型 ID，并同意发送请求。";
+      key: key || (base === config.base ? config.key : "") };
+    if (!next.base || !next.model) {
+      form.querySelector('[role="status"]').textContent = "请填写 API 地址和模型 ID。";
       return;
     }
     config = next;
     if (action !== "test") {
-      status = configured() ? "设置已保存。" : "设置已保存。填好 API 地址和模型 ID 并同意发送后即可聊天。";
+      status = "设置已保存。";
       refresh();
       return;
     }
@@ -316,7 +311,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         if (intent.kind === "insight") {
           const facts = spendingFacts(intent);
           response = spendingSummary(facts);
-          if (config === settings && settings.shareSummary && !getData().preferences.hideAmountsByDefault && facts.amountMinor &&
+          if (config === settings && !getData().preferences.hideAmountsByDefault && facts.amountMinor &&
             facts.baselineRecordedDays >= Math.min(3, facts.baselineDays)) {
             try {
               const advice = await callModel(settings, "advise", text, currentRequest.signal, facts);
@@ -393,7 +388,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       await switchSession(control.dataset.id);
       openChat();
     } else if (action === "clear-config" && !testing) {
-      config = { base: "", model: "", key: "", consent: false, shareSummary: false };
+      config = { base: "", model: "", key: "" };
       status = "已清除配置。";
       refresh();
     } else if (action === "example-record") {

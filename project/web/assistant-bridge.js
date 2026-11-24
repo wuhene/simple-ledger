@@ -11,6 +11,7 @@ const assets = {
   "/storage.js": ["storage.js", "text/javascript"],
   "/assistant.js": ["assistant.js", "text/javascript"],
   "/assistant-model.js": ["assistant-model.js", "text/javascript"],
+  "/category-icons.js": ["category-icons.js", "text/javascript"],
 };
 const systemPrompt = (await readFile(new URL("./assistant-prompt.txt", import.meta.url), "utf8")).trim();
 
