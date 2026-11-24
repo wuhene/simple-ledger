@@ -12,7 +12,7 @@ import {
   groupEntries,
   iconFor,
   iconKeys,
-  initialCategories,
+  isDiningCategory,
   isValidDate,
   localToday,
   money,
@@ -105,9 +105,8 @@ const state = {
   savedEntry: null,
   shareUrl: null,
   shareOptions: { amounts: true, ranking: false, achievements: false },
-  lastCategory: { [EXPENSE]: "expense-0", [INCOME]: "income-0" },
   undo: null,
-  showAllCats: false,
+  entryDockEntering: false,
   showAllMonths: false,
   showAllRanking: false,
   trendPoint: null,
@@ -130,9 +129,8 @@ const assistant = createAssistant({
 function activeCategories(type, includeHidden = false) {
   return state.data.categories
     .filter((c) => c.type === type && (includeHidden || !c.hidden))
-    .sort((a, b) => Number(isDining(b)) - Number(isDining(a)) || a.sortIndex - b.sortIndex);
+    .sort((a, b) => Number(isDiningCategory(b)) - Number(isDiningCategory(a)) || a.sortIndex - b.sortIndex);
 }
-const isDining = category => category.type === EXPENSE && category.name === "餐饮";
 function entryRows(entries) {
   const groups = groupEntries(entries);
   if (!groups.length)
@@ -218,11 +216,12 @@ function empty(title, body, action, label) {
 function home() {
   const rows = entriesForMonth(state.data.entries, state.month),
     t = totals(rows);
-  return `<section class="ledger-month" aria-label="月度账本">${periodPicker(state.month)}
+  const saved = state.savedEntry?.page === "home" ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
+  return `<h1 class="visually-hidden">明细</h1><section class="ledger-month" aria-label="月度账本"><div class="ledger-period">${periodPicker(state.month)}${amountVisibilityButton()}</div>
     <div class="ledger-summary"><div class="ledger-balance"><span>结余</span><strong>${formatYen(t.balance)}</strong></div>
     <div><span>收入</span><strong class="income">${formatYen(t.income)}</strong></div>
     <div><span>支出</span><strong>${formatYen(t.expense)}</strong></div></div></section>
-    <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="micro">${rows.length} 笔</span></div>
+    <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="ledger-count">${saved}<span class="micro">${rows.length} 笔</span></span></div>
     ${rows.length ? entryRows(rows) : empty(state.data.entries.length ? "这个月暂无记录" : "还没有记录", "从第一笔收入或支出开始。", "new-entry", "记第一笔")}</section>`;
 }
 function detail() {
@@ -233,22 +232,21 @@ function detail() {
 }
 function entryPage() {
   const d = state.entry;
-  const allCategories = activeCategories(d.type, true);
-  const dining = allCategories.find(isDining);
-  const cats = allCategories.filter((c) => !c.hidden || c.id === d.categoryId);
-  const shown = state.showAllCats ? cats : cats.slice(0, 8);
-  const categories = shown.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico" data-tone="${categoryTone(c)}">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
+  const cats = activeCategories(d.type, true).filter((c) => !c.hidden || c.id === d.categoryId);
+  const categories = cats.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico" data-tone="${categoryTone(c)}">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
+  return `<div class="entry-layout">
+    ${seg([[EXPENSE, "支出"], [INCOME, "收入"]], d.type, "entry-type")}
+    <div class="row category-heading"><h2 class="heading">选择分类</h2><button class="plain" data-action="category-manage">管理分类</button></div>
+    <section class="entry-fields" aria-label="记账分类"><div class="gridcats">${categories}</div></section>
+    ${d.categoryId ? entryDock(d) : ""}</div>`;
+}
+function entryDock(d) {
   const dateLabel = d.date === localToday() ? "今天" : dateText(d.date);
   const keys = ["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "日期"].map((k) => k === "日期" ? `<button class="op key-date" data-action="pick-date" aria-label="选择记账日期，当前${E(fullDate(d.date))}">${uiIcon("calendar")}<span>${dateLabel}</span></button>` : `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}" aria-label="${k === "⌫" ? "退格" : k}">${k}</button>`).join("");
-  const categoryActions = `${cats.length > 8 ? `<button class="plain" data-action="toggle-cats">${state.showAllCats ? "收起" : "全部分类"}</button>` : ""}<button class="plain" data-action="category-manage">管理</button>`;
-  return `<div class="entry-layout"><div class="entry-fields">
-    ${seg([[EXPENSE, "支出"], [INCOME, "收入"]], d.type, "entry-type")}
+  return `<section class="entry-dock ${state.entryDockEntering ? "entry-dock-enter" : ""}" aria-label="记账输入">
     <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div></div>
-    <div class="row category-heading"><h2 class="heading">选择分类</h2><div class="category-actions">${categoryActions}</div></div>
-    ${d.type === EXPENSE && (!dining || dining.hidden) ? `<button class="plain dining-recovery" data-action="restore-dining">${dining ? "餐饮已隐藏 · 恢复" : "添加餐饮分类"}</button>` : ""}
-    <div class="gridcats">${categories}</div>
     <textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
-  </div><div class="entry-dock"><div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></div></div>`;
+    <div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></section>`;
 }
 function categoryRanks(entries, type, click = true) {
   const ranked = categoryTotals(entries, state.data.categories, type);
@@ -376,7 +374,7 @@ function categoryManage() {
     active = list.filter((c) => !c.hidden),
     hidden = list.filter((c) => c.hidden);
   const item = (c) =>
-    `<div class="menu" draggable="${!isDining(c)}" data-catdrag="${E(c.id)}"><span class="ico" data-tone="${categoryTone(c)}">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · ${isDining(c) ? "置顶" : "拖动排序"}</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button><button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button></div>`;
+    `<div class="menu" draggable="${!isDiningCategory(c)}" data-catdrag="${E(c.id)}"><span class="ico" data-tone="${categoryTone(c)}">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · ${isDiningCategory(c) ? "置顶" : "拖动排序"}</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button>${isDiningCategory(c) ? "" : `<button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button>`}</div>`;
   return `${seg(
     [
       [EXPENSE, "支出"],
@@ -534,19 +532,20 @@ function report() {
   }<button class="primary" data-action="share">预览并下载报告图片</button>`;
 }
 function assistantEntryHtml() {
-  if (["home", "stats"].includes(state.page)) {
-    return '<button class="ai-entry" data-action="open-assistant" aria-label="打开 AI 助手">✦ AI</button>';
-  }
   if (state.page === "assistant") {
     return '<button class="ai-entry" data-action="assistant-history" aria-label="历史会话">历史</button>' +
       assistant.sessionButton() + '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
   }
   return "";
 }
+function amountVisibilityButton() {
+  const hidden = state.data.preferences.hideAmountsByDefault;
+  return `<button class="top-icon" data-action="toggle-hide" aria-label="${hidden ? "显示金额" : "隐藏金额"}">${uiIcon(hidden ? "eyeOff" : "eye")}</button>`;
+}
 function header() {
+  if (state.page === "home") return "";
   const main = ["home", "stats", "tools", "mine"].includes(state.page),
     titles = {
-      home: "简账",
       stats: "统计",
       tools: "工具",
       mine: "我的",
@@ -565,17 +564,23 @@ function header() {
       assistantHistory: "历史会话",
     };
   const saved = state.savedEntry?.page === state.page ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
-  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${saved}${main ? `<button class="top-icon" data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${uiIcon(state.data.preferences.hideAmountsByDefault ? "eyeOff" : "eye")}</button>` : ""}${assistantEntryHtml()}</header>`;
+  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${saved}${main ? amountVisibilityButton() : ""}${assistantEntryHtml()}</header>`;
 }
 function navbar() {
   if (!["home", "stats", "tools", "mine"].includes(state.page)) return "";
   const items = [
     ["home", "明细", "list"],
     ["stats", "统计", "chart"],
+    ["entry", "记一笔"],
     ["tools", "工具", "grid"],
     ["mine", "我的", "person"],
   ];
-  return `<button class="fab" data-action="new-entry"><span aria-hidden="true">＋</span>记一笔</button><nav class="bottom" aria-label="主导航">${items.map(([p, label, glyph]) => `<button data-action="nav" data-value="${p}" class="${state.page === p ? "active" : ""}" aria-current="${state.page === p ? "page" : "false"}"><span class="nav-icon">${uiIcon(glyph)}</span><span>${label}</span></button>`).join("")}</nav>`;
+  const ai = ["home", "stats"].includes(state.page)
+    ? '<button class="fab" data-action="open-assistant" aria-label="打开 AI 助手"><span aria-hidden="true">✦</span>AI</button>'
+    : "";
+  return `${ai}<nav class="bottom" aria-label="主导航">${items.map(([p, label, glyph]) =>
+    p === "entry" ? '<button class="nav-entry" data-action="new-entry"><span class="nav-plus" aria-hidden="true">＋</span><span>记一笔</span></button>' :
+    `<button data-action="nav" data-value="${p}" class="${state.page === p ? "active" : ""}" aria-current="${state.page === p ? "page" : "false"}"><span class="nav-icon">${uiIcon(glyph)}</span><span>${label}</span></button>`).join("")}</nav>`;
 }
 function monthModal(m) {
   const year = Number(m.pending.slice(0, 4)), selectedMonth = Number(m.pending.slice(5, 7));
@@ -609,7 +614,7 @@ function modalHtml() {
       body = dateModal(m);
       break;
     case "category":
-      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${legacyIcons[k][1]}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !cById(m.id)?.isBuiltin && !state.data.entries.some((e) => e.categoryId === m.id) ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
+      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" ${isDiningCategory(cById(m.id)) ? "readonly" : ""} value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${legacyIcons[k][1]}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !isDiningCategory(cById(m.id)) && !cById(m.id)?.isBuiltin && !state.data.entries.some((e) => e.categoryId === m.id) ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
       break;
     case "restore":
       body = `<h2>恢复备份</h2><p>这会替换当前全部数据。请先导出当前账本备份，并确认文件已经保留在电脑上。</p><button class="outline" data-action="export">导出当前备份</button><label><input type="checkbox" id="backupConfirmed"> 我已确认备份文件已保留</label><label for="restoreFile">选择 JSON 备份</label><input id="restoreFile" class="field" type="file" accept=".json,application/json"><p id="restoreError" class="error"></p><button class="primary" data-action="preview-restore">校验并预览</button><button class="plain" data-action="close-modal">取消</button>`;
@@ -674,7 +679,7 @@ function render(followChat = true) {
     `</div>`;
   phone.dataset.page = state.page;
   $(".content").scrollTop = samePage ? oldScroll : state.scrollByPage[state.page] || 0;
-  if (samePage && state.page === "entry") $(".entry-fields").scrollTop = oldEntryScroll;
+  if (state.page === "entry") $(".entry-fields").scrollTop = samePage ? oldEntryScroll : 0;
   const thread = $(".assistant-thread");
   if (thread) {
     thread.scrollTop = keepChatBottom ? thread.scrollHeight : oldChatScroll;
@@ -684,6 +689,7 @@ function render(followChat = true) {
     phone.querySelectorAll(".top, .content, .fab, .bottom").forEach((el) => el.inert = true);
   }
   state.motion = "";
+  state.entryDockEntering = false;
   if (state.modal?.entering) {
     state.modal.entering = false;
     $(".modal .icon-button, .modal input, .modal button")?.focus({ preventScroll: true });
@@ -774,23 +780,16 @@ async function reload() {
   render();
 }
 function beginEntry(e = null, nativeTransition = false) {
-  const type = e?.type || EXPENSE,
-    preferred = state.lastCategory[type],
-    valid = activeCategories(type).some((c) => c.id === preferred)
-      ? preferred
-      : activeCategories(type)[0]?.id;
   state.entry = {
     id: e?.id || null,
-    type,
-    categoryId: e?.categoryId || valid,
-    initialCategoryId: e?.categoryId || valid,
+    type: e?.type || EXPENSE,
+    categoryId: e?.categoryId || null,
     expr: e ? money(e.amountMinor).replaceAll(",", "") : "",
     date: e?.businessDate || localToday(),
     note: e?.note || "",
     error: "",
   };
   state.entryOrigin = state.page;
-  state.showAllCats = false;
   navigate("entry", nativeTransition ? "" : "motion-entry");
 }
 function draftChanged() {
@@ -809,9 +808,7 @@ function draftChanged() {
   return !!(
     d.expr ||
     d.note ||
-    d.date !== localToday() ||
-    d.type !== EXPENSE ||
-    d.categoryId !== d.initialCategoryId
+    d.date !== localToday()
   );
 }
 function back() {
@@ -872,7 +869,7 @@ function onKey(key) {
   $("#entryError").textContent = "";
 }
 async function saveEntry() {
-  if (state.saveBusy) return;
+  if (state.saveBusy || !state.entry?.categoryId) return;
   const d = state.entry;
   d.note = $("#entryNote").value.trim();
   let amountMinor;
@@ -909,7 +906,6 @@ async function saveEntry() {
       updatedAt: now,
     };
     await putEntry(entry);
-    state.lastCategory[d.type] = d.categoryId;
     state.data = await loadLedger();
     state.detailId = entry.id;
     const destination = old ? "detail" : state.entryOrigin;
@@ -994,6 +990,7 @@ async function saveCategory() {
     )
       throw new Error("同类型分类名称不能重复");
     const old = m.id ? cById(m.id) : null;
+    if (isDiningCategory(old) && name !== old.name) throw new Error("餐饮是固定支出分类");
     const category = old
       ? { ...old, name, iconKey }
       : {
@@ -1019,34 +1016,23 @@ async function saveCategory() {
 }
 async function toggleCategory(id) {
   const c = cById(id);
-  if (!c) return;
+  if (!c || isDiningCategory(c)) return;
   if (!c.hidden && activeCategories(c.type).length <= 1) {
     toast("至少保留一个可用分类");
     return;
   }
   await putCategory({ ...c, hidden: !c.hidden });
+  if (!c.hidden && state.entry?.categoryId === id &&
+    state.data.entries.find(entry => entry.id === state.entry.id)?.categoryId !== id) {
+    state.entry.categoryId = null;
+  }
   await reload();
   toast(c.hidden ? "分类已恢复" : "分类已隐藏");
-}
-async function restoreDining(button) {
-  if (state.page !== "entry" || state.entry.type !== EXPENSE) return;
-  const existing = state.data.categories.find(isDining);
-  const seed = initialCategories().find(isDining);
-  const category = existing ? { ...existing, hidden: false } :
-    cById(seed.id) ? { ...seed, id: uid(), isBuiltin: false } : seed;
-  button.disabled = true;
-  try {
-    await putCategory(category);
-    if (state.page === "entry" && state.entry.type === EXPENSE) state.entry.categoryId = category.id;
-    await reload();
-  } finally {
-    button.disabled = false;
-  }
 }
 async function reorderCategory(sourceId, targetId) {
   const a = cById(sourceId),
     b = cById(targetId);
-  if (!a || !b || a.type !== b.type || a.id === b.id || isDining(a) || isDining(b)) return;
+  if (!a || !b || a.type !== b.type || a.id === b.id || isDiningCategory(a) || isDiningCategory(b)) return;
   const rows = activeCategories(a.type, true),
     from = rows.findIndex((x) => x.id === a.id),
     to = rows.findIndex((x) => x.id === b.id);
@@ -1230,26 +1216,24 @@ async function handleAction(el) {
         const d = state.entry;
         if (d.type === v) break;
         d.type = v;
-        d.categoryId = activeCategories(v).some(
-          (c) => c.id === state.lastCategory[v],
-        )
-          ? state.lastCategory[v]
-          : activeCategories(v)[0]?.id || null;
-        state.showAllCats = false;
+        d.categoryId = null;
+        d.error = "";
         render();
+        $(".entry-fields").scrollTop = 0;
+        $(`[data-action="entry-type"][data-value="${v}"]`)?.focus({ preventScroll: true });
         break;
       }
-      case "entry-category":
-        state.entry.categoryId = id;
+      case "entry-category": {
+        const entry = state.entry;
+        state.entryDockEntering = !entry.categoryId;
+        entry.categoryId = id;
+        entry.error = "";
         render();
+        const selected = $(".gridcats .cat.on");
+        selected?.scrollIntoView({ block: "nearest" });
+        selected?.focus({ preventScroll: true });
         break;
-      case "restore-dining":
-        await restoreDining(el);
-        break;
-      case "toggle-cats":
-        state.showAllCats = !state.showAllCats;
-        render();
-        break;
+      }
       case "category-manage":
         state.catType = state.entry.type;
         state.categoryOrigin = "entry";
@@ -1572,6 +1556,7 @@ async function handleAction(el) {
           toast("预算已删除");
         }
         if (m.target === "remove-category") {
+          if (isDiningCategory(cById(m.id))) break;
           await removeCategory(m.id);
           await reload();
           toast("分类已删除");
@@ -1673,13 +1658,6 @@ $("#width390").addEventListener("click", () => {
 try {
   state.data = await loadLedger();
   await assistant.initHistory();
-  for (const type of [EXPENSE, INCOME]) {
-    const last = sortEntries(
-      state.data.entries.filter((e) => e.type === type),
-    ).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    if (last && activeCategories(type).some((c) => c.id === last.categoryId))
-      state.lastCategory[type] = last.categoryId;
-  }
   render();
 } catch (err) {
   phone.innerHTML = `<div class="loading"><h2>无法打开本地账本</h2><p>${E(err.message)}</p><button class="primary" onclick="location.reload()">重试</button></div>`;

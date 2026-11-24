@@ -1,4 +1,4 @@
-import { initialCategories, SCHEMA_VERSION, validateLedger } from "./model.js";
+import { diningCategoryRepair, initialCategories, SCHEMA_VERSION, validateLedger } from "./model.js";
 
 const DB_NAME = "simple-ledger";
 const DB_VERSION = 2;
@@ -61,10 +61,18 @@ export async function loadLedger() {
     request(tx.objectStore("meta").get("preferences")),
   ]);
   await done(tx);
+  const categories = result[1];
+  const dining = diningCategoryRepair(categories);
+  if (dining) {
+    await putCategory(dining);
+    const index = categories.findIndex(category => category.id === dining.id);
+    if (index < 0) categories.push(dining);
+    else categories[index] = dining;
+  }
   return {
     schemaVersion: SCHEMA_VERSION,
     entries: result[0],
-    categories: result[1],
+    categories,
     budgets: result[2],
     asset: result[3] ?? null,
     preferences: result[4] ?? { hideAmountsByDefault: false },
@@ -136,6 +144,8 @@ export async function replaceLedger(input, clearSessions = false) {
   budgets.clear();
   for (const e of data.entries) entries.put(e);
   for (const c of data.categories) categories.put(c);
+  const dining = diningCategoryRepair(data.categories);
+  if (dining) categories.put(dining);
   for (const b of data.budgets) budgets.put(b);
   meta.put(data.asset, "asset");
   meta.put(data.preferences, "preferences");

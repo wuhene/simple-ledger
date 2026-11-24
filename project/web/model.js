@@ -60,6 +60,19 @@ export function iconFor(name) {
   return "other";
 }
 
+export function isDiningCategory(category) {
+  return category?.type === EXPENSE && category.name === "餐饮";
+}
+
+export function diningCategoryRepair(categories) {
+  const dining = categories.find(isDiningCategory);
+  if (dining) return dining.hidden ? { ...dining, hidden: false } : null;
+  const seed = initialCategories().find(isDiningCategory);
+  return categories.some(category => category.id === seed.id)
+    ? { ...seed, id: crypto.randomUUID(), isBuiltin: false }
+    : seed;
+}
+
 export function localToday(now = new Date()) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
