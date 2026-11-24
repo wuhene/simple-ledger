@@ -159,6 +159,7 @@ const uiPaths = {
   chevronDown: '<path d="m5 9 7 7 7-7"/>',
   close: '<path d="M5 5 19 19M19 5 5 19"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/><circle cx="12" cy="12" r="7"/>',
 };
 function svgIcon(path) {
   return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
@@ -534,7 +535,7 @@ function report() {
 function assistantEntryHtml() {
   if (state.page === "assistant") {
     return '<button class="ai-entry" data-action="assistant-history" aria-label="历史会话">历史</button>' +
-      assistant.sessionButton() + '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
+      assistant.sessionButton() + `<button class="ai-entry ai-settings-icon" data-action="assistant-settings" aria-label="AI 助手设置">${uiIcon("settings")}</button>`;
   }
   return "";
 }
@@ -564,7 +565,7 @@ function header() {
       assistantHistory: "历史会话",
     };
   const saved = state.savedEntry?.page === state.page ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
-  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${saved}${main ? amountVisibilityButton() : ""}${assistantEntryHtml()}</header>`;
+  return `<header class="top ${state.page === "entry" ? "entry-top" : ""} ${state.page === "assistant" ? "assistant-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${saved}${main ? amountVisibilityButton() : ""}${assistantEntryHtml()}</header>`;
 }
 function navbar() {
   if (!["home", "stats", "tools", "mine"].includes(state.page)) return "";
@@ -644,6 +645,8 @@ function render(followChat = true) {
   const oldEntryScroll = $(".entry-fields")?.scrollTop || 0;
   const oldThread = $(".assistant-thread");
   const oldChatScroll = oldThread?.scrollTop || 0;
+  const focusedChat = document.activeElement?.matches("#assistant-chat textarea")
+    ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
   const keepChatBottom = !oldThread || (followChat && oldThread.scrollHeight - oldThread.clientHeight - oldChatScroll < 72);
   const oldFocus = state.modal && document.activeElement?.closest(".modal")
     ? { id: document.activeElement.id, action: document.activeElement.dataset.action, value: document.activeElement.dataset.value }
@@ -684,6 +687,13 @@ function render(followChat = true) {
   if (thread) {
     thread.scrollTop = keepChatBottom ? thread.scrollHeight : oldChatScroll;
     updateChatJump(thread);
+    if (focusedChat) {
+      const composer = $("#assistant-chat textarea");
+      if (!composer.disabled) {
+        composer.focus({ preventScroll: true });
+        composer.setSelectionRange(...focusedChat);
+      }
+    }
   }
   if (state.modal) {
     phone.querySelectorAll(".top, .content, .fab, .bottom").forEach((el) => el.inert = true);
@@ -1603,6 +1613,7 @@ phone.addEventListener("click", (e) => {
   if (pageControl && phone.contains(pageControl)) handleAction(pageControl);
 });
 phone.addEventListener("submit", assistant.submit);
+phone.addEventListener("keydown", assistant.onKeyDown);
 phone.addEventListener("scroll", (event) => {
   if (event.target.classList?.contains("assistant-thread")) updateChatJump(event.target);
 }, true);

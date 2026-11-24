@@ -8,6 +8,7 @@ const typeName = type => type === INCOME ? "收入" : "支出";
 export function createAssistant({ getData, escape: E, render, reload, isOpen, openChat }) {
   let config = { base: "", model: "", key: "" };
   let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
+  let progress = "", requestText = "";
   let chat = [], previousInput = "";
   let activeId = "", historyError = "";
   const sessions = new Map();
@@ -62,14 +63,20 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     return saveHistory(saveAssistantSession(session));
   }
 
+  function stopRequest() {
+    if (!request) return;
+    request.abort();
+    request = null;
+    busy = false;
+    progress = "";
+    input ||= requestText;
+    requestText = "";
+    say("已停止生成。");
+  }
+
   async function switchSession(id) {
     if (id === activeId) return;
-    if (request) {
-      request.abort();
-      request = null;
-      busy = false;
-      say("本次请求已停止。");
-    }
+    stopRequest();
     busy = true;
     try {
       await persistSession();
@@ -86,6 +93,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     request?.abort();
     if (request) busy = false;
     request = null;
+    progress = requestText = "";
     await clearLedger();
     sessions.clear();
     restoreSession(crypto.randomUUID(), null);
@@ -199,12 +207,23 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         item.percent.toFixed(1) + '%"></span></span></button>').join("") + detail + '</section>';
   }
 
+  function shortDate(date, showYear = false) {
+    const [year, month, day] = date.split("-").map(Number);
+    return (showYear ? year + "年" : "") + month + "月" + day + "日";
+  }
+
+  function rangeText(start, end) {
+    const showYear = start.slice(0, 4) !== end.slice(0, 4) || start.slice(0, 4) !== localToday().slice(0, 4);
+    return shortDate(start, showYear) + (start === end ? "" : " — " + shortDate(end, showYear));
+  }
+
   function richAnswer(item) {
     const snapshot = item.snapshot;
     const facts = snapshot?.facts;
-    const panel = (label, body) => '<section class="ai-data-block"><strong>' + E(label) + '</strong>' + body + '</section>';
+    const panel = (label, body, count = "") => '<section class="ai-data-block"><div class="ai-block-header"><strong>' +
+      E(label) + '</strong>' + (count ? '<span class="ai-block-count">' + E(count) + '</span>' : "") + '</div>' + body + '</section>';
     const row = (label, value) => '<div class="row"><span>' + E(label) + '</span><strong>' + E(value) + '</strong></div>';
-    const period = facts ? paragraph(E, facts.start + " 至 " + facts.end) : "";
+    const period = facts ? paragraph(E, rangeText(facts.start, facts.end)) : "";
     const seen = new Set();
     const dataTypes = ["totals", "categories", "entries", "comparison"];
     const formatText = text => E(text.replace(/\{\{category([1-5])\}\}/g, (_, number) =>
@@ -219,11 +238,15 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       if (!snapshot || seen.has(block.type)) return "";
       seen.add(block.type);
       if (block.type === "entries" && facts.count) {
-        const rows = snapshot.entries.map(entry => row(entry.date + " · " + (entry.note || entry.category),
-          (entry.type === INCOME ? "+" : "−") + displayMoney(entry.amountMinor)));
-        const more = rows.length > 5 ? '<details><summary>展开其余 ' + (rows.length - 5) + ' 笔</summary>' + rows.slice(5).join("") + '</details>' : "";
-        return panel((facts.category || "相关") + "明细 · " + facts.count + " 笔", period + rows.slice(0, 5).join("") + more +
-          (facts.count > rows.length ? paragraph(E, "这里显示最近 " + rows.length + " 笔。") : ""));
+        const entryRows = entries => entries.map((entry, index) =>
+          (facts.start !== facts.end && (index === 0 || entry.date !== entries[index - 1].date) ? '<div class="ai-entry-day">' +
+            E(shortDate(entry.date, entry.date.slice(0, 4) !== localToday().slice(0, 4))) + '</div>' : "") +
+          row(entry.note || entry.category, (entry.type === INCOME ? "+" : "−") + displayMoney(entry.amountMinor))).join("");
+        const entries = snapshot.entries;
+        const more = entries.length > 5 ? '<details><summary>展开其余 ' + (entries.length - 5) + ' 笔</summary>' +
+          entryRows(entries.slice(5)) + '</details>' : "";
+        return panel((facts.category || "相关") + "明细", period + entryRows(entries.slice(0, 5)) + more +
+          (facts.count > entries.length ? paragraph(E, "这里显示最近 " + entries.length + " 笔。") : ""), facts.count + " 笔");
       }
       if (block.type === "categories" && snapshot.ranking.length) {
         return panel("分类分布", period + snapshot.ranking.map(entry =>
@@ -253,8 +276,10 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     if (item.kind === "answer") return richAnswer(item);
     if (item.kind === "report") return reportCard(item);
     if (item.kind === "receipt") {
-      return '<section class="card ai-receipt"><strong>' + (item.undone ? "已撤销" : "已入账") +
-        '</strong>' + paragraph(E, item.entry.note + " · " + displayMoney(item.entry.amountMinor)) +
+      return '<section class="card ai-receipt"><div class="ai-receipt-main"><span class="ai-receipt-icon" aria-hidden="true">' +
+        (item.undone ? "↶" : "✓") + '</span><div><strong>' + (item.undone ? "已撤销" : "已入账") +
+        '</strong>' + (item.entry.note ? paragraph(E, item.entry.note) : "") + '</div><strong class="ai-receipt-value">' +
+        E(displayMoney(item.entry.amountMinor)) + '</strong></div>' +
         (item.undone ? "" : '<button type="button" class="outline" data-assistant="undo" data-id="' +
           E(item.entry.id) + '"' + (busy ? " disabled" : "") + '>撤销入账</button>') + '</section>';
     }
@@ -263,6 +288,31 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
 
   function sessionButton() {
     return button("new-session", "新会话", "ai-entry", busy && !request);
+  }
+
+  function transcript() {
+    let html = "", reply = "";
+    const group = contents => '<div class="ai-turn"><div class="ai-turn-label"><span class="ai-spark" aria-hidden="true">✦</span>简账助手</div>' + contents + '</div>';
+    for (const item of chat) {
+      if (item.kind === "text" && item.user) {
+        if (reply) html += group(reply);
+        reply = "";
+        html += chatItem(item);
+      } else {
+        reply += chatItem(item);
+      }
+    }
+    reply += draftCard();
+    if (request) reply += '<div class="ai-progress" role="status"><span class="ai-progress-dot" aria-hidden="true"></span>' + E(progress) + '</div>';
+    return html + (reply ? group(reply) : "");
+  }
+
+  function starter() {
+    if (!configured() && chat.length) return '<div class="ai-connect-note">历史可查看<button type="button" class="plain" data-action="assistant-settings">连接模型继续聊天</button></div>';
+    if (chat.length) return "";
+    return '<div class="ai-starter"><span class="ai-starter-mark" aria-hidden="true">✦</span><h2>想记一笔，还是聊聊花销？</h2>' +
+      (!configured() ? '<p>连接模型后，就可以用一句话记账或查账。</p><button type="button" class="primary" data-action="assistant-settings">连接模型</button>' :
+        '<div class="ai-starter-actions">' + button("example-record", "午餐花了 28 元") + button("example-stats", "这个月主要花在哪？") + '</div>') + '</div>';
   }
 
   function historyPage() {
@@ -277,16 +327,15 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
   }
 
   function page() {
-    return '<div class="assistant-thread" role="region" aria-label="聊天记录" tabindex="0"><div class="ai-chat" aria-live="polite">' +
-      (!configured() ? '<div class="card"><strong>先连接一个模型</strong><p class="micro">在设置中填写 API 地址和模型 ID，即可用 AI 记账或查账。</p></div>' :
-        !chat.length ? '<div class="card"><strong>说一句，记账或查账</strong><p class="micro">例如「今天中午吃叉烧饭花了28元」。</p>' +
-        '<div class="ai-actions">' + button("example-record", "试一句记账") + button("example-stats", "试查本月收支") + '</div></div>' : "") +
+    return '<div class="assistant-thread" role="region" aria-label="聊天记录" tabindex="0"><div class="ai-chat">' +
+      starter() +
       (historyError ? '<p role="status" class="error">' + E(historyError) + '</p>' : "") +
-      chat.map(chatItem).join("") + draftCard() + '</div></div>' +
+      transcript() + '</div></div>' +
       '<div class="assistant-dock"><button type="button" class="chat-latest" data-action="assistant-latest" hidden>回到最新 ↓</button>' +
-      '<form id="assistant-chat" class="ai-composer"><input aria-label="聊天消息" name="message" class="field" maxlength="600" autocomplete="off"' +
-      ' placeholder="说一句，记账或查账" value="' + E(input) + '"' + (busy || !configured() ? " disabled" : "") + '><button class="primary"' +
-      (busy || !configured() ? " disabled" : "") + '>' + (busy && !draft ? "处理中…" : "发送") + '</button></form></div>';
+      '<form id="assistant-chat" class="ai-composer"><textarea aria-label="聊天消息" name="message" class="field" rows="1" maxlength="600" ' +
+      'placeholder="输入一笔账，或聊聊花销"' + (!configured() ? " disabled" : "") + '>' + E(input) + '</textarea>' +
+      (request ? button("stop", "停止", "ai-stop") : '<button type="submit" class="primary"' +
+        (busy || !configured() ? " disabled" : "") + '>发送</button>') + '</form></div>';
   }
 
   async function callModel(settings, action, text = "", signal, facts) {
@@ -354,6 +403,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     const settings = config;
     const currentRequest = new AbortController();
     request = currentRequest;
+    requestText = text;
+    progress = "正在理解你的问题";
     busy = true;
     persistSession();
     refresh();
@@ -372,6 +423,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         const hidden = getData().preferences.hideAmountsByDefault;
         let blocks = fallbackAnswer(intent, snapshot, hidden);
         if (config === settings && !hidden) {
+          progress = "正在分析账本";
+          refresh();
           try {
             const answer = await callModel(settings, "analyze", text, currentRequest.signal, snapshot.facts);
             blocks = answer.kind === "answer" ? answer.blocks :
@@ -394,12 +447,13 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       }
     } catch (error) {
       if (request === currentRequest) {
-        input = text;
+        input ||= text;
         say(error.message);
       }
     } finally {
       if (request === currentRequest) {
         request = null;
+        progress = requestText = "";
         busy = false;
         persistSession();
         refresh();
@@ -438,6 +492,12 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     if (action === "new-session" && (!busy || request)) {
       await switchSession(crypto.randomUUID());
       refresh();
+    } else if (action === "stop" && request) {
+      const hadFocus = control.matches(":focus");
+      stopRequest();
+      persistSession();
+      refresh();
+      if (hadFocus) document.querySelector("#assistant-chat textarea")?.focus({ preventScroll: true });
     } else if (action === "restore-session" && (!busy || request) && sessions.has(control.dataset.id)) {
       await switchSession(control.dataset.id);
       openChat();
@@ -446,9 +506,9 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       status = "已清除配置。";
       refresh();
     } else if (action === "example-record") {
-      await send("今天中午吃叉烧饭花了28元");
+      await send("午餐花了 28 元");
     } else if (action === "example-stats") {
-      await send("统计本月收支，哪个支出占比最多？");
+      await send("这个月主要花在哪？");
     } else if (action === "cancel" && !busy) {
       draft = null;
       say("已取消草稿。");
@@ -497,5 +557,12 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     if (field.form?.id === "assistant-draft" && draft) draft[field.name] = field.value;
   }
 
-  return { page, configPage, historyPage, initHistory, clearLocalData, sessionButton, act, submit, onInput };
+  function onKeyDown(event) {
+    if (event.target.form?.id !== "assistant-chat" || event.key !== "Enter" || event.shiftKey ||
+      event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    if (!busy) event.target.form.requestSubmit();
+  }
+
+  return { page, configPage, historyPage, initHistory, clearLocalData, sessionButton, act, submit, onInput, onKeyDown };
 }
