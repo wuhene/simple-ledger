@@ -18,7 +18,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 18px 12px 30px;
+  padding: 12px;
 }
 button,
 input,
@@ -56,12 +56,11 @@ button:disabled {
 }
 .phone {
   width: 390px;
-  height: 844px;
+  height: min(844px, calc(100dvh - 66px));
   max-width: 100%;
   background: #f6f8f7;
-  border: 8px solid #1b2823;
-  border-radius: 34px;
-  box-shadow: 0 20px 65px #172d2633;
+  border: 1px solid #d9dfe6;
+  border-radius: 16px;
   position: relative;
   overflow: hidden;
   display: flex;
@@ -726,9 +725,10 @@ label {
   --top-muted: var(--secondary);
   --top-divider: var(--line);
   --top-chip: #ffffff8c;
-  --income-ink: #21634d;
-  --expense-ink: #a84035;
+  --income-ink: #b23832;
+  --expense-ink: #21634d;
   --expense-chart: #d77b6e;
+  --entry-final-radius: 15px;
   color: var(--ink);
   background: #f1f2f4;
 }
@@ -1158,18 +1158,15 @@ body::-webkit-scrollbar,
 
 /* Compact ledger and stats. */
 #phone[data-page="stats"] .top { height: 58px; min-height: 58px; }
-#phone[data-page="home"] .content { padding-top: 12px; }
+#phone[data-page="home"] .content { padding-top: 8px; background: var(--subtle); }
 #phone[data-page="stats"] .content { padding-top: 8px; }
 .ledger-month {
-  padding: 3px 9px 9px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--surface);
+  border-radius: 12px;
 }
 .ledger-month .month-period { margin: 0; gap: 1px; }
-.ledger-period { display: flex; align-items: center; gap: 2px; }
+.ledger-period { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
 .ledger-period .month-period { flex: 1; min-width: 0; }
-.ledger-period .period-current { min-width: 0; gap: 4px; padding-inline: 3px; }
+.ledger-period .period-current { min-width: 0; justify-content: flex-start; gap: 4px; padding-inline: 3px; }
 .ledger-period .period-arrow { width: 42px; }
 .ledger-period .top-icon {
   width: 44px;
@@ -1195,7 +1192,7 @@ body::-webkit-scrollbar,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px 10px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border-radius: 12px;
   background: var(--surface);
   color: var(--ink);
@@ -1213,19 +1210,23 @@ body::-webkit-scrollbar,
 .ledger-summary .expense { color: var(--expense-ink); }
 .ledger-balance strong { font-size: 1.85rem; line-height: 1.16; }
 .ledger-summary strong, .record strong, .stats-value, .amount-editor { font-variant-numeric: tabular-nums; }
-.ledger-heading { margin-top: 14px; }
+.ledger-heading { margin: 16px 0 8px; }
 .ledger-heading .heading { font-size: 1.03rem; margin: 3px 0; }
 .ledger-count { display: flex; align-items: baseline; gap: 10px; }
 .ledger-rows .group-head {
-  margin-top: 8px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  background: var(--field-surface);
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--subtle);
   font-size: .82rem;
   align-items: baseline;
 }
+.ledger-rows .group-head time { flex: none; font-weight: 650; color: var(--ink); }
 .ledger-rows .group-head > :last-child { font-variant-numeric: tabular-nums; }
-.ledger-rows .record { min-height: 48px; padding: 6px 4px; }
+.ledger-rows .list { background: var(--surface); }
+.ledger-rows .record { min-height: 48px; padding: 5px 8px; border-color: var(--field-surface); color: var(--ink); gap: 8px; }
+.ledger-rows .record .income { color: var(--brand); }
+.ledger-rows .record-text { overflow-wrap: anywhere; }
+.ledger-rows .record-text small { margin-top: 1px; }
 .ledger-rows .record .ico { width: 32px; height: 32px; min-width: 32px; border-radius: 50%; }
 .record.record-saved { background: var(--soft); border-radius: 9px; }
 .save-status { flex: none; white-space: nowrap; color: var(--brand-dark); font-size: .8rem; }
@@ -1499,10 +1500,9 @@ body::-webkit-scrollbar,
 .ledger-month {
   background: var(--top-surface);
   color: var(--top-ink);
-  border-color: var(--top-divider);
 }
 .ledger-month :is(.period button, .period button svg, .top-icon) { color: var(--top-ink); }
-.ledger-period .top-icon,
+.ledger-period .top-icon { background: transparent; }
 .ledger-month .month-period > button:not(:disabled):is(:hover, :focus-visible) { background: var(--top-chip); }
 .ledger-period .top-icon:is(:hover, :focus-visible) { background: var(--top-chip); }
 .primary:not(.danger), .fab, .nav-plus {

@@ -148,14 +148,20 @@ function entryRows(entries) {
   const groups = groupEntries(entries);
   if (!groups.length)
     return `<div class="empty"><strong>这个范围暂无记录</strong><span>试试切换日期，或记下第一笔。</span></div>`;
+  const today = localToday();
+  const yesterday = shiftDate(today, -1);
   return groups
-    .map(
-      (g) =>
-        `<div class="group-head"><span>${E(fullDate(g.date))}</span><span>${g.income ? `收入 ${formatYen(g.income)}` : ""}${g.income && g.expense ? " · " : ""}${g.expense ? `支出 ${formatYen(g.expense)}` : ""}</span></div><div class="list">${g.rows.map((e) => {
+    .map((g) => {
+      const relativeDay = g.date === today ? "今天" : g.date === yesterday ? "昨天" : "";
+      const weekday = weekdays[new Date(`${g.date}T12:00:00`).getDay()];
+      const day = state.page === "home"
+        ? relativeDay ? `${relativeDay} · ${dateText(g.date)}` : `${dateText(g.date)} · ${weekday}`
+        : fullDate(g.date);
+      return `<div class="group-head"><time datetime="${E(g.date)}" title="${E(fullDate(g.date))}">${E(day)}</time><span>${g.income ? `收入 ${formatYen(g.income)}` : ""}${g.income && g.expense ? " · " : ""}${g.expense ? `支出 ${formatYen(g.expense)}` : ""}</span></div><div class="list">${g.rows.map((e) => {
           const category = cById(e.categoryId), recent = state.savedEntry?.id === e.id && state.savedEntry.page === state.page;
           return `<button class="record ${recent ? "record-saved" : ""}" data-action="detail" data-id="${E(e.id)}"><span class="ico category-icon">${categoryIcon(category)}</span><span class="record-text">${E(e.note || cName(e.categoryId))}${e.note ? `<small>${E(cName(e.categoryId))}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`;
-        }).join("")}</div>`,
-    )
+        }).join("")}</div>`;
+    })
     .join("");
 }
 const uiPaths = {
@@ -226,7 +232,7 @@ function home() {
     t = totals(rows);
   const saved = state.savedEntry?.page === "home" ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
   return `<h1 class="visually-hidden">明细</h1><section class="ledger-month" aria-label="月度账本"><div class="ledger-period">${periodPicker(state.month)}${amountVisibilityButton()}</div>
-    <div class="ledger-summary"><div class="ledger-balance"><span>结余</span><strong>${formatYen(t.balance)}</strong></div>
+    <div class="ledger-summary"><div class="ledger-balance"><span>本月结余</span><strong>${formatYen(t.balance)}</strong></div>
     <div><span>收入</span><strong class="income">${formatYen(t.income)}</strong></div>
     <div><span>支出</span><strong class="expense">${formatYen(t.expense)}</strong></div></div></section>
     <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="ledger-count">${saved}<span class="micro">${rows.length} 笔</span></span></div>
