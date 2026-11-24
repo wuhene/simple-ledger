@@ -12,13 +12,7 @@ const assets = {
   "/assistant.js": ["assistant.js", "text/javascript"],
   "/assistant-model.js": ["assistant-model.js", "text/javascript"],
 };
-const systemPrompt = [
-  "你负责把中文记账请求转换为一个 JSON 对象，不要执行操作、计算账本或返回 Markdown。",
-  '单笔记录: {"kind":"record","type":"EXPENSE 或 INCOME","amount":"十进制元字符串","date":"YYYY-MM-DD","category":"分类名或空字符串","note":"备注"}。',
-  '查询: {"kind":"stats","start":"YYYY-MM-DD","end":"YYYY-MM-DD","metric":"overview 或 income 或 expense"}。查分类明细可额外给 category。',
-  '欠缺信息或不是以上任务: {"kind":"clarify","question":"不超过100个字的问题"}。',
-  "使用用户提供的今天和已有结构化日期上下文。记账没给日期可用今天；缺金额、多个金额或日期有歧义时追问，不能猜。统计日期区间含首尾。",
-].join("\n");
+const systemPrompt = (await readFile(new URL("./assistant-prompt.txt", import.meta.url), "utf8")).trim();
 
 function reply(res, status, body, type = "application/json") {
   res.writeHead(status, { "Content-Type": type + "; charset=utf-8", "Cache-Control": "no-store",
@@ -81,11 +75,22 @@ async function proxy(req, res) {
   if (!test && (typeof input.text !== "string" || !input.text.trim() || input.text.length > 600)) {
     return reply(res, 400, { error: "消息内容无效" });
   }
-  const task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } :
-    { today: input.today, text: input.text, dateContext: input.dateContext, pendingText: input.pendingText };
+  const shortText = (value, limit) => typeof value === "string" ? value.slice(0, limit) : undefined;
+  const date = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+  const previous = input.lastQuery;
+  const pending = input.pending;
+  const task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } : {
+    today: date(input.today),
+    text: input.text,
+    lastQuery: previous && { start: date(previous.start), end: date(previous.end),
+      metric: shortText(previous.metric, 8), category: shortText(previous.category, 24) },
+    pending: pending && { original: shortText(pending.original, 600), latest: shortText(pending.latest, 600), question: shortText(pending.question, 200) },
+  };
+  const connection = new AbortController();
+  res.on("close", () => connection.abort());
   try {
     const response = await fetch(url, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(25000),
+      method: "POST", redirect: "error", signal: AbortSignal.any([connection.signal, AbortSignal.timeout(25000)]),
       headers: { "Content-Type": "application/json", ...(input.key ? { Authorization: "Bearer " + input.key } : {}) },
       body: JSON.stringify({ model: input.model, stream: false,
         messages: [{ role: "system", content: systemPrompt }, { role: "user", content: JSON.stringify(task) }] }),
@@ -105,6 +110,7 @@ async function proxy(req, res) {
     }
     return reply(res, 200, { intent });
   } catch (error) {
+    if (connection.signal.aborted) return;
     return reply(res, 502, { error: error.name === "TimeoutError" ? "模型请求超时，请重试。" : "无法连接模型，请检查 API 地址和网络。" });
   }
 }

@@ -116,9 +116,9 @@ let assistantOrigin = "home", assistantSettingsOrigin = "settings";
 const assistant = createAssistant({
   getData: () => state.data,
   escape: E,
-  render: () => {
+  render: (scroll = true) => {
     render();
-    if (state.page === "assistant") $(".content").scrollTop = $(".content").scrollHeight;
+    if (scroll && state.page === "assistant") $(".content").scrollTop = $(".content").scrollHeight;
   },
   reload,
   isOpen: () => ["assistant", "assistantSettings"].includes(state.page),
@@ -528,7 +528,7 @@ function assistantEntryHtml() {
     return '<button class="ai-entry" data-action="open-assistant" aria-label="打开 AI 助手">✦ AI</button>';
   }
   if (state.page === "assistant") {
-    return '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
+    return assistant.sessionButton() + '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
   }
   return "";
 }

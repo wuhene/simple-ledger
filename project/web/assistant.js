@@ -1,34 +1,33 @@
 import { EXPENSE, INCOME, categoryTotals, entriesInBounds, localToday, money, sortEntries, totals } from "./model.js";
 import { putEntry, removeEntry } from "./storage.js";
-import { interpretLocally, validateIntent } from "./assistant-model.js";
+import { validateIntent } from "./assistant-model.js";
 
 const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>';
 const typeName = type => type === INCOME ? "收入" : "支出";
 
 export function createAssistant({ getData, escape: E, render, reload, isOpen }) {
-  let config = { mode: "local", base: "", model: "", key: "", consent: false };
-  let status = "", input = "", busy = false, testing = false, context = null, draft = null, saved = null;
-  let report = null, reportCategory = "", chat = [];
+  let config = { base: "", model: "", key: "", consent: false };
+  let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
+  let chat = [];
   const say = (text, user = false) => {
-    chat = [...chat.slice(-19), { text, user }];
+    chat.push({ kind: "text", text, user });
   };
   const refresh = () => { if (isOpen()) render(); };
   const button = (action, label, style = "outline", disabled = false) => '<button type="button" class="' +
     style + '" data-assistant="' + action + '"' + (disabled ? " disabled" : "") + ">" + E(label) + "</button>";
   const displayMoney = minor => getData().preferences.hideAmountsByDefault ? "••••" : "¥" + money(minor);
   const available = () => getData().categories.filter(category => !category.hidden);
+  const configured = () => Boolean(config.base && config.model && config.consent);
 
   function configPage() {
-    return '<form id="assistant-config" class="card ai-config"><label>识别模式<select name="mode" class="field">' +
-      '<option value="local"' + (config.mode === "local" ? " selected" : "") + '>本地体验</option>' +
-      '<option value="cloud"' + (config.mode === "cloud" ? " selected" : "") + '>云端补充识别</option></select></label>' +
+    return '<form id="assistant-config" class="card ai-config">' +
       '<label>API 地址<input class="field" name="base" type="url" placeholder="https://服务地址/v1" value="' + E(config.base) + '"></label>' +
       '<label>模型 ID<input class="field" name="model" maxlength="150" value="' + E(config.model) + '" placeholder="填服务商提供的模型 ID"></label>' +
       '<label>API Key<input class="field" name="key" type="password" autocomplete="off" maxlength="512" placeholder="' +
       (config.key ? "已设置 · 留空沿用" : "模型需要认证时填写") + '"></label>' +
       '<label class="ai-consent"><input name="consent" type="checkbox"' + (config.consent ? " checked" : "") +
       '>允许把输入及必要上下文发给此模型服务</label>' +
-      paragraph(E, "本地模式无需配置。云端测试仅发送示例句，账本和统计结果留在本机。配置仅在当前页面会话中有效。") +
+      paragraph(E, "每条消息由所选模型识别。连接测试仅发送示例句，账本和统计结果留在本机。配置在刷新前有效。") +
       '<div class="ai-actions"><button class="primary" name="action" value="save"' + (testing ? " disabled" : "") + '>保存设置</button>' +
       '<button class="outline" name="action" value="test"' + (testing ? " disabled" : "") + '>' + (testing ? "测试中…" : "测试连接") + '</button>' +
       button("clear-config", "清除配置", "plain", testing) + '</div><p role="status" class="micro">' + E(status) + '</p></form>';
@@ -48,75 +47,101 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       button("cancel", "取消草稿", "outline", busy) + '</div></form>';
   }
 
-  function reportCard() {
-    if (!report) return "";
-    const data = getData(), rows = entriesInBounds(data.entries, report);
-    const amount = totals(rows);
-    const type = report.metric === "income" ? INCOME : EXPENSE;
+  function createReport(query) {
+    const data = getData(), rows = entriesInBounds(data.entries, query);
+    const type = query.metric === "income" ? INCOME : EXPENSE;
     const ranking = categoryTotals(rows, data.categories, type);
+    const sorted = sortEntries(rows);
+    const details = new Map(ranking.map(item => [item.category.id, { count: 0, rows: [] }]));
+    for (const row of sorted) {
+      const detail = details.get(row.categoryId);
+      if (!detail) continue;
+      detail.count++;
+      if (detail.rows.length < 20) detail.rows.push(row);
+    }
+    return { kind: "report", id: crypto.randomUUID(), query, amount: totals(rows), type, ranking,
+      details, empty: !rows.length, selected: ranking.find(item => item.category.name === query.category)?.category.id || "" };
+  }
+
+  function reportCard(report) {
+    const { query, amount, type, ranking } = report;
     const leader = ranking[0];
     const tied = ranking.filter(item => item.amountMinor === leader?.amountMinor);
-    const matched = ranking.find(item => item.category.id === reportCategory || (!reportCategory && item.category.name === report.category));
+    const matched = ranking.find(item => item.category.id === report.selected);
+    const breakdown = matched ? report.details.get(matched.category.id) : null;
     const detail = matched
       ? '<div class="ai-detail"><strong>' + E(matched.category.name) + '明细</strong>' +
-        sortEntries(rows.filter(item => item.categoryId === matched.category.id)).slice(0, 20).map(item =>
+        breakdown.rows.map(item =>
           '<div class="row"><span>' + E(item.businessDate + " · " + (item.note || matched.category.name)) +
           '</span><span>' + displayMoney(item.amountMinor) + '</span></div>').join("") +
-        (rows.filter(item => item.categoryId === matched.category.id).length > 20 ? paragraph(E, "这里展示最近 20 笔。") : "") + '</div>'
-      : report.category ? paragraph(E, "这个区间没有该分类明细。") : "";
-    return '<section class="card ai-report"><strong>收支统计</strong>' + paragraph(E, report.start + " 至 " + report.end) +
+        (breakdown.count > 20 ? paragraph(E, "这里展示最近 20 笔。") : "") + '</div>'
+      : query.category && !ranking.some(item => item.category.name === query.category) ? paragraph(E, "这个区间没有该分类明细。") : "";
+    return '<section class="card ai-report"><strong>收支统计</strong>' + paragraph(E, query.start + " 至 " + query.end) +
       '<div class="ai-fields"><div>收入 <strong>' + displayMoney(amount.income) + '</strong></div><div>支出 <strong>' +
       displayMoney(amount.expense) + '</strong></div></div>' +
-      (!rows.length ? paragraph(E, "这个区间没有记录。") : !leader ? paragraph(E, "这个区间没有" + typeName(type) + "记录。") :
+      (report.empty ? paragraph(E, "这个区间没有记录。") : !leader ? paragraph(E, "这个区间没有" + typeName(type) + "记录。") :
         paragraph(E, typeName(type) + "占比最高：" + tied.map(item => item.category.name).join("、") +
           (tied.length > 1 ? "（并列）" : "") + " · " + leader.percent.toFixed(1) + "%")) +
-      ranking.map(item => '<button type="button" class="ai-rank" data-assistant="detail" data-category="' + E(item.category.id) +
+      ranking.map(item => '<button type="button" class="ai-rank" data-assistant="detail" data-id="' + E(report.id) + '" data-category="' + E(item.category.id) +
         '"><span class="row"><span>' + E(item.category.name) + '</span><span>' + displayMoney(item.amountMinor) + ' · ' +
         item.percent.toFixed(1) + '% ›</span></span><span class="ai-track" aria-hidden="true"><span style="width:' +
         item.percent.toFixed(1) + '%"></span></span></button>').join("") + detail + '</section>';
   }
 
-  function page() {
-    return '<div class="ai-chat" aria-live="polite">' +
-      (!chat.length ? '<div class="card"><strong>说一句，记账或查账</strong><p class="micro">例如「今天中午吃叉烧饭花了28元」。</p>' +
-        '<div class="ai-actions">' + button("example-record", "试一句记账") + button("example-stats", "试查本月收支") + '</div></div>' : "") +
-      chat.map(item => '<p class="ai-bubble ' + (item.user ? "ai-user" : "") + '">' + E(item.text) + '</p>').join("") +
-      draftCard() + reportCard() +
-      (saved ? '<div class="card"><strong>已入账</strong>' + paragraph(E, saved.note + " · " + displayMoney(saved.amountMinor)) +
-        button("undo", "撤销入账", "outline", busy) + '</div>' : "") + '</div>' +
-      '<form id="assistant-chat" class="ai-composer"><input aria-label="聊天消息" name="message" class="field" maxlength="600" autocomplete="off"' +
-      ' placeholder="说一句，记账或查账" value="' + E(input) + '"' + (busy ? " disabled" : "") + '><button class="primary"' +
-      (busy ? " disabled" : "") + '>' + (busy && !draft ? "处理中…" : "发送") + '</button></form>';
+  function chatItem(item) {
+    if (item.kind === "report") return reportCard(item);
+    if (item.kind === "receipt") {
+      return '<section class="card ai-receipt"><strong>' + (item.undone ? "已撤销" : "已入账") +
+        '</strong>' + paragraph(E, item.entry.note + " · " + displayMoney(item.entry.amountMinor)) +
+        (item.undone ? "" : '<button type="button" class="outline" data-assistant="undo" data-id="' +
+          E(item.entry.id) + '"' + (busy ? " disabled" : "") + '>撤销入账</button>') + '</section>';
+    }
+    return '<p class="ai-bubble ' + (item.user ? "ai-user" : "") + '">' + E(item.text) + '</p>';
   }
 
-  async function callModel(settings, action, text = "") {
+  function sessionButton() {
+    return button("new-session", "新会话", "ai-entry", busy && !request);
+  }
+
+  function page() {
+    return '<div class="ai-chat" aria-live="polite">' +
+      (!configured() ? '<div class="card"><strong>先连接一个模型</strong><p class="micro">在设置中填写 API 地址和模型 ID，即可用 AI 记账或查账。</p></div>' :
+        !chat.length ? '<div class="card"><strong>说一句，记账或查账</strong><p class="micro">例如「今天中午吃叉烧饭花了28元」。</p>' +
+        '<div class="ai-actions">' + button("example-record", "试一句记账") + button("example-stats", "试查本月收支") + '</div></div>' : "") +
+      chat.map(chatItem).join("") + draftCard() + '</div>' +
+      '<form id="assistant-chat" class="ai-composer"><input aria-label="聊天消息" name="message" class="field" maxlength="600" autocomplete="off"' +
+      ' placeholder="说一句，记账或查账" value="' + E(input) + '"' + (busy || !configured() ? " disabled" : "") + '><button class="primary"' +
+      (busy || !configured() ? " disabled" : "") + '>' + (busy && !draft ? "处理中…" : "发送") + '</button></form>';
+  }
+
+  async function callModel(settings, action, text = "", signal) {
+    const today = action === "test" ? "2026-01-02" : localToday();
     let response;
     try {
-      response = await fetch("./ai/api", { method: "POST", headers: { "Content-Type": "application/json" },
+      response = await fetch("./ai/api", { method: "POST", signal, headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, base: settings.base, model: settings.model, key: settings.key,
-          ...(action === "interpret" ? { text, today: localToday(), dateContext: context?.bounds,
-            pendingText: context?.pendingText || context?.text } : {}) }) });
+          ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending } : {}) }) });
     } catch {
       throw new Error("无法连接本机调试服务，请运行 npm start。");
     }
     const data = await response.json().catch(() => null);
     if (!response.ok || !data) throw new Error(data?.error || "无法连接本机调试服务，请运行 npm start。");
-    return validateIntent(data.intent, action === "test" ? "2026-01-02" : localToday());
+    return validateIntent(data.intent, today);
   }
 
   async function submitConfig(form, action) {
     if (testing) return;
     const fields = new FormData(form);
     const base = fields.get("base").trim(), key = fields.get("key").trim();
-    const next = { mode: fields.get("mode"), base, model: fields.get("model").trim(),
+    const next = { base, model: fields.get("model").trim(),
       key: key || (base === config.base ? config.key : ""), consent: fields.has("consent") };
-    if ((action === "test" || next.mode === "cloud") && (!next.base || !next.model || !next.consent)) {
+    if (action === "test" && (!next.base || !next.model || !next.consent)) {
       form.querySelector('[role="status"]').textContent = "请填写 API 地址和模型 ID，并同意发送请求。";
       return;
     }
     config = next;
     if (action !== "test") {
-      status = "设置已保存。";
+      status = configured() ? "设置已保存。" : "设置已保存。填好 API 地址和模型 ID 并同意发送后即可聊天。";
       refresh();
       return;
     }
@@ -140,51 +165,49 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
   async function send(value) {
     const text = value.trim();
     if (busy || !text) return;
+    if (!configured()) return;
     if (draft) {
       say("请先确认或取消上一笔草稿。");
       refresh();
       return;
     }
-    report = null;
-    reportCategory = "";
     say(text, true);
     input = "";
+    const currentRequest = new AbortController();
+    request = currentRequest;
     busy = true;
     refresh();
     try {
-      const today = localToday();
-      let intent = interpretLocally(text, today, context, available());
-      if (intent?.kind === "partial") {
-        context = { kind: "partial", record: intent.record, pendingText: text };
-        say("这笔花了多少钱？请回复金额，例如 28 元。");
-        return;
-      }
-      if (intent) intent = validateIntent(intent, today);
-      else if (config.mode === "cloud" && config.consent) intent = await callModel(config, "interpret", text);
-      else {
-        context = null;
-        say("本地模式没有识别这句。可以试「今天中午吃叉烧饭花了28元」或「本月收入多少」，也可以在设置开启云端识别。");
-        return;
-      }
+      const intent = await callModel(config, "interpret", text, currentRequest.signal);
+      if (request !== currentRequest) return;
       if (intent.kind === "record") {
         const category = available().find(item => item.name === intent.category && item.type === intent.type);
         draft = { id: crypto.randomUUID(), type: intent.type, amount: (intent.amountMinor / 100).toFixed(2),
           date: intent.date, categoryId: category?.id || "", note: intent.note };
-        context = null;
+        context = { lastQuery: context?.lastQuery };
         say(category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。");
       } else if (intent.kind === "stats") {
-        report = intent;
-        context = { bounds: { start: intent.start, end: intent.end } };
-      } else {
-        context = { kind: "period", text: context?.text || text, pendingText: context?.pendingText || text };
+        chat.push(createReport(intent));
+        context = { lastQuery: { start: intent.start, end: intent.end, metric: intent.metric, category: intent.category } };
+      } else if (intent.kind === "clarify") {
+        const pending = { original: context?.pending?.original || text, latest: text, question: intent.question };
+        context = { lastQuery: context?.lastQuery, pending };
         say(intent.question);
+      } else {
+        context = { lastQuery: context?.lastQuery };
+        say(intent.text);
       }
     } catch (error) {
-      input = text;
-      say(error.message);
+      if (request === currentRequest) {
+        input = text;
+        say(error.message);
+      }
     } finally {
-      busy = false;
-      refresh();
+      if (request === currentRequest) {
+        request = null;
+        busy = false;
+        refresh();
+      }
     }
   }
 
@@ -202,9 +225,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       const entry = { id: draft.id, type: record.type, amountMinor: record.amountMinor,
         businessDate: record.date, categoryId: draft.categoryId, note: record.note, createdAt: now, updatedAt: now };
       await putEntry(entry);
-      saved = entry;
       draft = null;
-      say("已记入本地账本。");
+      chat.push({ kind: "receipt", entry, undone: false });
       await reload();
     } catch (error) {
       say(error.message || "账单保存失败，请重试。");
@@ -216,8 +238,18 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
 
   async function act(control) {
     const action = control.dataset.assistant;
-    if (action === "clear-config" && !testing) {
-      config = { mode: "local", base: "", model: "", key: "", consent: false };
+    if (action === "new-session" && (!busy || request)) {
+      if (draft && !window.confirm("开启新会话并放弃这笔未入账草稿？")) return;
+      request?.abort();
+      request = null;
+      busy = false;
+      input = "";
+      context = null;
+      draft = null;
+      chat = [];
+      refresh();
+    } else if (action === "clear-config" && !testing) {
+      config = { base: "", model: "", key: "", consent: false };
       status = "已清除配置。";
       refresh();
     } else if (action === "example-record") {
@@ -229,22 +261,27 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       say("已取消草稿。");
       refresh();
     } else if (action === "detail") {
-      reportCategory = reportCategory === control.dataset.category ? "" : control.dataset.category;
-      refresh();
-    } else if (action === "undo" && saved && !busy) {
+      const report = chat.find(item => item.kind === "report" && item.id === control.dataset.id);
+      if (report) {
+        report.selected = report.selected === control.dataset.category ? "" : control.dataset.category;
+        render(false);
+      }
+    } else if (action === "undo" && !busy) {
+      const receipt = chat.find(item => item.kind === "receipt" && item.entry.id === control.dataset.id && !item.undone);
+      if (!receipt) return;
+      const saved = receipt.entry;
       busy = true;
       try {
         const current = getData().entries.find(item => item.id === saved.id);
         if (current && current.updatedAt !== saved.updatedAt) throw new Error("该账单已修改，请在明细中处理。");
         await removeEntry(saved.id);
-        saved = null;
-        say("已撤销入账。");
+        receipt.undone = true;
         await reload();
       } catch (error) {
         say(error.message || "撤销失败，请重试。");
       } finally {
         busy = false;
-        refresh();
+        if (isOpen()) render(false);
       }
     }
   }
@@ -264,5 +301,5 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     if (field.form?.id === "assistant-draft" && draft) draft[field.name] = field.value;
   }
 
-  return { page, configPage, act, submit, onInput };
+  return { page, configPage, sessionButton, act, submit, onInput };
 }
