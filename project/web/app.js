@@ -36,6 +36,7 @@ import {
   replaceLedger,
   clearLedger,
 } from "./storage.js";
+import { createAssistant } from "./assistant.js";
 
 const $ = (s) => document.querySelector(s),
   phone = $("#phone");
@@ -111,6 +112,17 @@ const state = {
   scrollByPage: {},
   motion: "",
 };
+let assistantOrigin = "home", assistantSettingsOrigin = "settings";
+const assistant = createAssistant({
+  getData: () => state.data,
+  escape: E,
+  render: () => {
+    render();
+    if (state.page === "assistant") $(".content").scrollTop = $(".content").scrollHeight;
+  },
+  reload,
+  isOpen: () => ["assistant", "assistantSettings"].includes(state.page),
+});
 
 function activeCategories(type, includeHidden = false) {
   return state.data.categories
@@ -365,7 +377,8 @@ function categoryManage() {
   )}<button class="primary" data-action="new-category">＋ 新增分类</button><h2 class="heading">使用中的分类</h2><div class="list">${active.map(item).join("")}</div>${hidden.length ? `<h2 class="heading">已隐藏</h2><div class="list">${hidden.map(item).join("")}</div>` : ""}`;
 }
 function settings() {
-  return `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。请定期导出备份；更换地址或浏览器不会自动同步。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
+  const aiSettings = '<div class="list"><button class="menu" data-action="assistant-settings"><span>AI 助手设置</span><span class="chev">›</span></button></div>';
+  return aiSettings + `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。请定期导出备份；更换地址或浏览器不会自动同步。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
 }
 
 const palette = [
@@ -510,6 +523,15 @@ function report() {
         })()}</div>`
   }<button class="primary" data-action="share">预览并下载报告图片</button>`;
 }
+function assistantEntryHtml() {
+  if (["home", "stats"].includes(state.page)) {
+    return '<button class="ai-entry" data-action="open-assistant" aria-label="打开 AI 助手">✦ AI</button>';
+  }
+  if (state.page === "assistant") {
+    return '<button class="ai-entry" data-action="assistant-settings" aria-label="AI 助手设置">设置</button>';
+  }
+  return "";
+}
 function header() {
   const main = ["home", "stats", "tools", "mine"].includes(state.page),
     titles = {
@@ -527,8 +549,10 @@ function header() {
       assets: "资产概览",
       categories: "分类管理",
       settings: "设置与数据",
+      assistant: "AI 助手",
+      assistantSettings: "AI 助手设置",
     };
-  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${main ? `<button class="top-icon" data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${uiIcon(state.data.preferences.hideAmountsByDefault ? "eyeOff" : "eye")}</button>` : ""}</header>`;
+  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${main ? `<button class="top-icon" data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${uiIcon(state.data.preferences.hideAmountsByDefault ? "eyeOff" : "eye")}</button>` : ""}${assistantEntryHtml()}</header>`;
 }
 function navbar() {
   if (!["home", "stats", "tools", "mine"].includes(state.page)) return "";
@@ -618,6 +642,8 @@ function render() {
     mine,
     categories: categoryManage,
     settings,
+    assistant: assistant.page,
+    assistantSettings: assistant.configPage,
   };
   const main = ["home", "stats", "tools", "mine"].includes(state.page);
   phone.innerHTML = `<div class="phone-screen">` +
@@ -782,6 +808,8 @@ function back() {
     assets: "tools",
     categories: state.categoryOrigin,
     settings: "mine",
+    assistant: assistantOrigin,
+    assistantSettings: assistantSettingsOrigin,
   };
   navigate(targets[state.page] || "home");
 }
@@ -1509,10 +1537,27 @@ async function handleAction(el) {
 }
 
 phone.addEventListener("click", (e) => {
-  const target = e.target.closest("[data-action]");
-  if (target && phone.contains(target)) handleAction(target);
+  const aiControl = e.target.closest("[data-assistant]");
+  if (aiControl && phone.contains(aiControl)) {
+    void assistant.act(aiControl);
+    return;
+  }
+  const pageControl = e.target.closest("[data-action]");
+  if (pageControl?.dataset.action === "open-assistant") {
+    assistantOrigin = state.page;
+    navigate("assistant");
+    return;
+  }
+  if (pageControl?.dataset.action === "assistant-settings") {
+    assistantSettingsOrigin = state.page;
+    navigate("assistantSettings");
+    return;
+  }
+  if (pageControl && phone.contains(pageControl)) handleAction(pageControl);
 });
+phone.addEventListener("submit", assistant.submit);
 phone.addEventListener("input", (e) => {
+  assistant.onInput(e);
   if (state.page === "entry" && state.entry) {
     if (e.target.id === "entryNote") state.entry.note = e.target.value;
   }

@@ -1,16 +1,17 @@
 # 简账项目交接文档
 
-更新：2026-10-10 · 主线：`master` · 状态：Web 已验收；Android APK 已构建，待设备验收
+更新：2026-11-24 · 当前需求分支：`2026-11-24` · 状态：AI 助手 Web 调试版待验收；Android 基线待设备验收
 
 ## 接手先读
 
 1. 阅读 [`AGENTS.md`](AGENTS.md) 的分支、Wiki、提交与验收约定。每次开发改动同步更新本文件、AGENTS 待办和对应需求 Wiki，并与代码一起提交推送。
 2. Web 需求阅读 `wiki/2026-09-30-init/`、`wiki/2026-09-30-1/` 与 `wiki/2026-10-09/`；Android 需求阅读 [`wiki/2026-10-10/原生Android-PRD与验收.md`](wiki/2026-10-10/原生Android-PRD与验收.md) 和 [`开发进度.md`](wiki/2026-10-10/开发进度.md)。
 3. 检查 `git status --short --branch` 并更新 `master`。Web、Android 新需求都从 `master` 按日期开需求分支；不再用平台专属主分支。
+4. 当前 AI 需求阅读 [PRD](wiki/2026-11-24/AI助手-PRD.md)、[交互与技术方案](wiki/2026-11-24/AI助手-交互与技术方案.md) 和 [进度与验收](wiki/2026-11-24/进度与验收.md)。
 
 ## 当前结构
 
-- [`project/web/`](project/web/)：已由用户验收的固定手机画布 Web 二版。浏览器账本保存在当前地址的 IndexedDB。进入此目录运行 `python -m http.server 4173 --bind 127.0.0.1`，打开 `http://127.0.0.1:4173/`。
+- [`project/web/`](project/web/)：固定手机画布 Web 二版与 AI 调试版。浏览器账本保存在当前地址的 IndexedDB。进入此目录运行 `npm start`，打开 `http://127.0.0.1:4173/`。
 - [`project/android/`](project/android/)：原生 Android View + SQLite 工程；[`SimpleLedger-debug.apk`](project/android/SimpleLedger-debug.apk) 是可下载的调试签名包，最低 Android 8.0。Web 数据不会自动进入 App，可用 JSON 备份迁移。
 - `master` 同时保存两套代码和全部 Wiki。按用户最新要求，`master-web` 已删除；已有日期需求分支保留用于历史与后续验收反馈。
 - Android 代码由 `2026-10-10` 需求分支整合到 `master` 是用户要求的目录/主线调整，**不代表 Android 已通过真机验收**。Android 反馈仍可在该需求分支修复，合入前核对主线最新状态。
@@ -33,6 +34,14 @@
 1. 在 Android 8.0+ 设备安装 APK，按 `wiki/2026-10-10/开发进度.md` 验证记账、返回手势、日期、备份恢复、报告分享、小屏与性能。把反馈和结果记入对应需求 Wiki。
 2. Web 新需求在 `project/web/` 开发，Android 新需求在 `project/android/` 开发；都从最新 `master` 开日期分支。
 3. 旧软件数据导入仍缺实际导出样本；云同步、多账本与资产账户明细不在当前范围。
+4. 在 `2026-11-24` 上验收 Web AI 助手，先试本地记账、统计，再选择实际的兼容模型测连接与口语识别。设置路径是「我的 → 设置与数据 → AI 助手设置」。Web 验收后再确定原生实现与 Key 保存方式。
+
+## AI 助手交接（`2026-11-24`）
+
+- `project/web/app.js`、`styles.css` 接入聊天和模型设置；`assistant.js` 复用 IndexedDB 流水读写与现有统计口径；`assistant-model.js` 校验本地和云端识别结果；`assistant-bridge.js` 仅在本机提供模型请求中转。
+- 配置与 Key 只存在当前页面内存，刷新后回到本地模式。测试连接使用虚构句子。云端识别只接收输入与必要上下文。
+- 原有 5 项业务测试和语法检查通过；Chrome 360/390px 跑通记账、查询、撤销与手动记账。模型连接已用本机模拟接口复验，真实服务商尚待联调。详见 [进度与验收](wiki/2026-11-24/进度与验收.md)。
+- Android 交互反馈仍在 `2026-10-10-1` 分支待设备验收。该分支的交接和鲨鱼记账迁移讨论仍以该分支的 `HANDOFF.md` 为准。
 
 ## 持续交接规则
 
