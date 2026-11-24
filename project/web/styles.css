@@ -1212,23 +1212,24 @@ body::-webkit-scrollbar,
 .ledger-summary .expense { color: var(--expense-ink); }
 .ledger-balance strong { font-size: 1.85rem; line-height: 1.16; }
 .ledger-summary strong, .record strong, .stats-value, .amount-editor { font-variant-numeric: tabular-nums; }
-.ledger-heading { margin: 16px 0 8px; }
+.ledger-heading { margin: 18px 0 10px; }
 .ledger-heading .heading { font-size: 1.03rem; margin: 3px 0; }
 .ledger-count { display: flex; align-items: baseline; gap: 10px; }
 .ledger-rows .group-head {
   margin: 0;
-  padding: 6px 8px;
+  padding: 8px;
   border-bottom: 1px solid var(--line);
   font-size: .82rem;
   align-items: baseline;
 }
+.ledger-rows .list + .group-head { margin-top: 12px; }
 .ledger-rows .group-head time { flex: none; font-weight: 650; color: var(--ink); }
 .ledger-rows .group-head > :last-child { font-variant-numeric: tabular-nums; }
 .ledger-rows .list { background: var(--surface); }
-.ledger-rows .record { min-height: 48px; padding: 5px 8px; border-color: var(--field-surface); color: var(--ink); gap: 8px; }
+.ledger-rows .record { min-height: 58px; padding: 9px 8px; border-color: var(--field-surface); color: var(--ink); gap: 10px; }
 .ledger-rows .record .income { color: var(--brand); }
 .ledger-rows .record-text { overflow-wrap: anywhere; }
-.ledger-rows .record-text small { margin-top: 1px; }
+.ledger-rows .record-text small { margin-top: 3px; }
 .ledger-rows .record .ico { width: 32px; height: 32px; min-width: 32px; border-radius: 50%; }
 .record.record-saved { background: var(--soft); border-radius: 9px; }
 .save-status { flex: none; white-space: nowrap; color: var(--brand-dark); font-size: .8rem; }
