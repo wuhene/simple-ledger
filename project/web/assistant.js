@@ -98,7 +98,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       '<label>模型 ID<input class="field" name="model" maxlength="150" value="' + E(config.model) + '" placeholder="填服务商提供的模型 ID"></label>' +
       '<label>API Key<input class="field" name="key" type="password" autocomplete="off" maxlength="512" placeholder="' +
       (config.key ? "已设置 · 留空沿用" : "模型需要认证时填写") + '"></label>' +
-      paragraph(E, "聊天会向此模型发送输入和必要上下文。给个性化建议时会用到支出汇总，原始流水和备注留在本机。配置在刷新前有效。") +
+      paragraph(E, "聊天会向模型发送输入和必要上下文。分析账本时会用到相关汇总，原始流水和备注由本机展示。配置在刷新前有效。") +
       '<div class="ai-actions"><button class="primary" name="action" value="save"' + (testing ? " disabled" : "") + '>保存设置</button>' +
       '<button class="outline" name="action" value="test"' + (testing ? " disabled" : "") + '>' + (testing ? "测试中…" : "测试连接") + '</button>' +
       button("clear-config", "清除配置", "plain", testing) + '</div><p role="status" class="micro">' + E(status) + '</p></form>';
@@ -118,50 +118,60 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       button("cancel", "取消草稿", "outline", busy) + '</div></form>';
   }
 
-  function createReport(query) {
-    const data = getData(), rows = entriesInBounds(data.entries, query);
+  function analysisSnapshot(query) {
+    const { entries, categories } = getData();
     const type = query.metric === "income" ? INCOME : EXPENSE;
-    const ranking = categoryTotals(rows, data.categories, type);
-    const sorted = sortEntries(rows);
-    const details = new Map(ranking.map(item => [item.category.id, { count: 0, rows: [] }]));
-    for (const row of sorted) {
-      const detail = details.get(row.categoryId);
-      if (!detail) continue;
-      detail.count++;
-      if (detail.rows.length < 20) detail.rows.push(row);
-    }
-    return { kind: "report", id: crypto.randomUUID(), query, amount: totals(rows), type, ranking,
-      details, empty: !rows.length, selected: ranking.find(item => item.category.name === query.category)?.category.id || "" };
-  }
-
-  function spendingFacts(query) {
-    const entries = getData().entries;
-    const spend = bounds => entriesInBounds(entries, bounds).filter(item => item.type === EXPENSE);
-    const days = dayCount(query), referenceDays = days === 1 ? 7 : days;
-    const baseline = { start: shiftDate(query.start, -referenceDays), end: shiftDate(query.start, -1) };
-    const current = spend(query), previous = spend(baseline);
+    const category = query.category ? categories.find(item => item.name === query.category && item.type === type) : null;
+    const scopedRows = bounds => entriesInBounds(entries, bounds).filter(item =>
+      (query.metric === "overview" && !query.category || item.type === type) &&
+      (!query.category || item.categoryId === category?.id));
+    const rows = scopedRows(query);
+    const { income, expense } = totals(rows);
+    const days = dayCount(query);
+    const referenceDays = days === 1 ? 7 : days;
+    const reference = query.comparison || (query.kind === "insight" || query.view === "comparison"
+      ? { start: shiftDate(query.start, -referenceDays), end: shiftDate(query.start, -1) } : null);
+    const prior = reference ? scopedRows(reference) : [];
+    const previous = totals(prior);
+    const baseline = reference ? { ...reference, days: dayCount(reference), count: prior.length,
+      recordedDays: new Set(prior.map(item => item.businessDate)).size, incomeMinor: previous.income, expenseMinor: previous.expense } : null;
+    const names = new Map(categories.map(item => [item.id, item.name]));
+    const ranking = query.category ? [] : categoryTotals(rows, categories, type).slice(0, 8)
+      .map(item => ({ name: item.category.name, amountMinor: item.amountMinor, percent: item.percent }));
+    const facts = { start: query.start, end: query.end, days, count: rows.length, category: query.category,
+      metric: query.metric, view: query.view, incomeMinor: income, expenseMinor: expense,
+      largestMinor: rows.reduce((largest, item) => Math.max(largest, item.amountMinor), 0), baseline,
+      top: ranking.slice(0, 5).map(item => ({ amountMinor: item.amountMinor, percent: Math.round(item.percent * 10) / 10 })) };
     return {
-      start: query.start, end: query.end, days, amountMinor: totals(current).expense,
-      baselineStart: baseline.start, baselineEnd: baseline.end, baselineDays: referenceDays,
-      baselineMinor: totals(previous).expense, baselineRecordedDays: new Set(previous.map(item => item.businessDate)).size,
+      facts, entries: sortEntries(rows).slice(0, 20).map(item => ({
+        date: item.businessDate, note: item.note, amountMinor: item.amountMinor,
+        category: names.get(item.categoryId) || "未知分类", type: item.type,
+      })),
+      ranking,
     };
   }
 
-  function spendingSummary(facts) {
-    if (getData().preferences.hideAmountsByDefault) {
-      return "金额已隐藏。判断花得多不多，可以先和自己平时的日均支出或预算比较。";
+  function fallbackAnswer(query, snapshot, hidden) {
+    const facts = snapshot.facts;
+    const label = (facts.category || "") + (facts.metric === "income" ? "收入" : "支出");
+    const blocks = [];
+    let text;
+    if (hidden) text = "账本金额已隐藏，可以查看这次查询的日期和记录。";
+    else if (!facts.count) text = "这段时间没有找到" + (facts.category ? "「" + facts.category + "」的" : "符合条件的") + "记录。";
+    else if (facts.metric === "overview" && !facts.category) {
+      text = "这段时间记了 " + displayMoney(facts.incomeMinor) + " 收入、" + displayMoney(facts.expenseMinor) + " 支出。";
+    } else {
+      text = label + "共 " + facts.count + " 笔，合计 " + displayMoney(facts.metric === "income" ? facts.incomeMinor : facts.expenseMinor) + "。";
     }
-    if (!facts.amountMinor) return "这段时间没有记下支出。记录可能不完整，暂时没法判断花得多不多。";
-    const lead = (facts.days === 1 ? "这一天" : "这段时间") + "记了 " + displayMoney(facts.amountMinor) + "。";
-    if (facts.baselineRecordedDays < Math.min(3, facts.baselineDays)) {
-      return lead + "对比期的支出记录太少，暂时判断不了算不算高。";
+    if (query.kind === "insight" && facts.baseline && facts.baseline.recordedDays < Math.min(3, facts.baseline.days)) {
+      text += " 对比期记录偏少，暂时不好判断是否比平时高。";
     }
-    const average = Math.round(facts.amountMinor / facts.days);
-    const normal = Math.round(facts.baselineMinor / facts.baselineDays);
-    const change = average > normal ? "高于" : average < normal ? "低于" : "与";
-    return lead + "按已记账的数据，日均 " + displayMoney(average) + "，" + change + "此前 " +
-      facts.baselineDays + " 天的日均 " + displayMoney(normal) + (change === "与" ? "相同。" : "。") +
-      "可以再看看是否有一次性的开销。";
+    blocks.push({ type: "paragraph", text });
+    if (facts.count && (query.view === "entries" || (query.category && !query.view))) blocks.push({ type: "entries" });
+    else if (query.view === "categories" && snapshot.ranking.length) blocks.push({ type: "categories" });
+    else if (facts.baseline?.count && (query.kind === "insight" || query.view === "comparison")) blocks.push({ type: "comparison" });
+    else if (query.view === "totals") blocks.push({ type: "totals" });
+    return blocks;
   }
 
   function reportCard(report) {
@@ -189,7 +199,58 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         item.percent.toFixed(1) + '%"></span></span></button>').join("") + detail + '</section>';
   }
 
+  function richAnswer(item) {
+    const snapshot = item.snapshot;
+    const facts = snapshot?.facts;
+    const panel = (label, body) => '<section class="ai-data-block"><strong>' + E(label) + '</strong>' + body + '</section>';
+    const row = (label, value) => '<div class="row"><span>' + E(label) + '</span><strong>' + E(value) + '</strong></div>';
+    const period = facts ? paragraph(E, facts.start + " 至 " + facts.end) : "";
+    const seen = new Set();
+    const dataTypes = ["totals", "categories", "entries", "comparison"];
+    const formatText = text => E(text.replace(/\{\{category([1-5])\}\}/g, (_, number) =>
+      snapshot?.ranking[Number(number) - 1]?.name || "该分类"));
+    const blocks = facts && getData().preferences.hideAmountsByDefault
+      ? [{ type: "paragraph", text: "账本金额已隐藏。此处展示查询记录。" }, ...item.blocks.filter(block => dataTypes.includes(block.type))]
+      : item.blocks;
+    const parts = blocks.map(block => {
+      if (block.type === "heading") return '<h3>' + formatText(block.text) + '</h3>';
+      if (block.type === "paragraph") return '<p>' + formatText(block.text) + '</p>';
+      if (block.type === "bullets") return '<ul>' + block.items.map(text => '<li>' + formatText(text) + '</li>').join("") + '</ul>';
+      if (!snapshot || seen.has(block.type)) return "";
+      seen.add(block.type);
+      if (block.type === "entries" && facts.count) {
+        const rows = snapshot.entries.map(entry => row(entry.date + " · " + (entry.note || entry.category),
+          (entry.type === INCOME ? "+" : "−") + displayMoney(entry.amountMinor)));
+        const more = rows.length > 5 ? '<details><summary>展开其余 ' + (rows.length - 5) + ' 笔</summary>' + rows.slice(5).join("") + '</details>' : "";
+        return panel((facts.category || "相关") + "明细 · " + facts.count + " 笔", period + rows.slice(0, 5).join("") + more +
+          (facts.count > rows.length ? paragraph(E, "这里显示最近 " + rows.length + " 笔。") : ""));
+      }
+      if (block.type === "categories" && snapshot.ranking.length) {
+        return panel("分类分布", period + snapshot.ranking.map(entry =>
+          row(entry.name, displayMoney(entry.amountMinor) + " · " + entry.percent.toFixed(1) + "%") +
+          '<div class="ai-track" aria-hidden="true"><span style="width:' + entry.percent.toFixed(1) + '%"></span></div>').join(""));
+      }
+      if (block.type === "totals") {
+        return panel((facts.category || "") + "汇总", period +
+          (facts.metric !== "expense" ? row("收入", displayMoney(facts.incomeMinor)) : "") +
+          (facts.metric !== "income" ? row("支出", displayMoney(facts.expenseMinor)) : "") +
+          row("记录", facts.count + " 笔"));
+      }
+      if (block.type === "comparison" && facts.baseline?.count) {
+        const isIncome = facts.metric === "income";
+        const metric = isIncome ? "incomeMinor" : "expenseMinor";
+        return panel(isIncome ? "日均收入对比" : "日均支出对比", period +
+          row("本期", displayMoney(Math.round(facts[metric] / facts.days))) +
+          row(facts.baseline.start + " 至 " + facts.baseline.end, displayMoney(Math.round(facts.baseline[metric] / facts.baseline.days))) +
+          paragraph(E, "对比期 " + facts.baseline.recordedDays + " 天有记录"));
+      }
+      return "";
+    }).join("");
+    return '<div class="ai-rich-answer">' + (parts || '<p>这次没有可展示的内容。</p>') + '</div>';
+  }
+
   function chatItem(item) {
+    if (item.kind === "answer") return richAnswer(item);
     if (item.kind === "report") return reportCard(item);
     if (item.kind === "receipt") {
       return '<section class="card ai-receipt"><strong>' + (item.undone ? "已撤销" : "已入账") +
@@ -235,14 +296,14 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       response = await fetch("./ai/api", { method: "POST", signal, headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, base: settings.base, model: settings.model, key: settings.key,
           ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending, previousInput } :
-            action === "advise" ? { text, facts } : {}) }) });
+            action === "analyze" ? { text, facts } : {}) }) });
     } catch {
       throw new Error("无法连接本机调试服务，请运行 npm start。");
     }
     const data = await response.json().catch(() => null);
     if (!response.ok || !data) throw new Error(data?.error || "无法连接本机调试服务，请运行 npm start。");
     const result = validateIntent(data.intent, today);
-    if (action === "advise" && result.kind !== "message") throw new Error("模型未返回建议");
+    if (action === "analyze" && !["answer", "message"].includes(result.kind)) throw new Error("模型未返回分析");
     return result;
   }
 
@@ -307,36 +368,29 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         context = { lastQuery: context?.lastQuery };
         say(intent.text || (category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。"));
       } else if (intent.kind === "stats" || intent.kind === "insight") {
-        let response = intent.text;
-        if (intent.kind === "insight") {
-          const facts = spendingFacts(intent);
-          response = spendingSummary(facts);
-          if (config === settings && !getData().preferences.hideAmountsByDefault && facts.amountMinor &&
-            facts.baselineRecordedDays >= Math.min(3, facts.baselineDays)) {
-            try {
-              const advice = await callModel(settings, "advise", text, currentRequest.signal, facts);
-              response += "\n\n" + advice.text;
-            } catch {
-              // The on-device comparison is still available when model commentary fails.
-            }
-            if (request !== currentRequest) return;
+        const snapshot = analysisSnapshot(intent);
+        const hidden = getData().preferences.hideAmountsByDefault;
+        let blocks = fallbackAnswer(intent, snapshot, hidden);
+        if (config === settings && !hidden) {
+          try {
+            const answer = await callModel(settings, "analyze", text, currentRequest.signal, snapshot.facts);
+            blocks = answer.kind === "answer" ? answer.blocks :
+              [{ type: "paragraph", text: answer.text }, ...blocks.filter(block => block.type !== "paragraph")];
+          } catch {
+            // The local answer still works when the analysis request fails.
           }
-        } else if (!response) {
-          const { income, expense } = totals(entriesInBounds(getData().entries, intent));
-          response = intent.metric === "income" ? "这段时间记了 " + displayMoney(income) + " 收入。" :
-            intent.metric === "expense" ? "这段时间记了 " + displayMoney(expense) + " 支出。" :
-            "这段时间记了 " + displayMoney(income) + " 收入、" + displayMoney(expense) + " 支出。";
+          if (request !== currentRequest) return;
         }
-        if (response) say(response);
-        if (intent.kind === "stats" || intent.showCard) chat.push(createReport(intent));
-        context = { lastQuery: { start: intent.start, end: intent.end, metric: intent.metric, category: intent.category } };
+        chat.push({ kind: "answer", blocks, snapshot });
+        context = { lastQuery: { start: intent.start, end: intent.end, metric: intent.metric, category: intent.category, view: intent.view } };
       } else if (intent.kind === "clarify") {
         const pending = { original: context?.pending?.original || text, latest: text, question: intent.question };
         context = { lastQuery: context?.lastQuery, pending };
         say(intent.question);
       } else {
         context = { lastQuery: context?.lastQuery };
-        say(intent.text);
+        if (intent.kind === "answer") chat.push({ kind: "answer", blocks: intent.blocks });
+        else say(intent.text);
       }
     } catch (error) {
       if (request === currentRequest) {

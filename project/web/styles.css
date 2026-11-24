@@ -1243,3 +1243,14 @@ body::-webkit-scrollbar,
   color: var(--brand-dark);
 }
 .ai-bubble:not(.ai-user) { background: transparent; border-radius: 0; padding-left: 1px; }
+.ai-rich-answer { display: grid; gap: 9px; min-width: 0; }
+.ai-rich-answer :is(h3, p, ul) { margin: 0; overflow-wrap: anywhere; }
+.ai-rich-answer > p { white-space: pre-line; }
+.ai-rich-answer h3 { font-size: 1.03rem; }
+.ai-rich-answer ul { padding-inline-start: 1.4em; }
+.ai-rich-answer li + li { margin-top: 4px; }
+.ai-data-block { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.ai-data-block .row { align-items: baseline; gap: 8px; min-height: 27px; }
+.ai-data-block .row strong { flex: none; font-variant-numeric: tabular-nums; }
+.ai-data-block .row span { min-width: 0; overflow-wrap: anywhere; }
+.ai-data-block summary { min-height: 33px; color: var(--brand); }

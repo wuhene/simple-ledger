@@ -60,7 +60,7 @@ async function proxy(req, res) {
     }
     if (length > 12000) return reply(res, 413, { error: "请求太长" });
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (!input || !["test", "interpret", "advise"].includes(input.action) ||
+    if (!input || !["test", "interpret", "analyze"].includes(input.action) ||
       typeof input.base !== "string" || typeof input.model !== "string" || !input.model.trim() ||
       typeof input.key !== "string" || /[\r\n]/.test(input.key)) throw new Error();
   } catch {
@@ -80,26 +80,37 @@ async function proxy(req, res) {
   const date = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
   const previous = input.lastQuery;
   const pending = input.pending;
-  const advice = input.action === "advise";
+  const analysis = input.action === "analyze";
   let task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } : {
     today: date(input.today),
     text: input.text,
     previousInput: shortText(input.previousInput, 300) || undefined,
     lastQuery: previous && { start: date(previous.start), end: date(previous.end),
-      metric: shortText(previous.metric, 8), category: shortText(previous.category, 24) },
+      metric: shortText(previous.metric, 8), category: shortText(previous.category, 24), view: shortText(previous.view, 12) || undefined },
     pending: pending && { original: shortText(pending.original, 600), latest: shortText(pending.latest, 600), question: shortText(pending.question, 200) },
   };
-  if (advice) {
+  if (analysis) {
     const facts = input.facts || {};
-    const dateKeys = ["start", "end", "baselineStart", "baselineEnd"];
-    const numberKeys = ["days", "amountMinor", "baselineDays", "baselineMinor", "baselineRecordedDays"];
+    const dateKeys = ["start", "end"];
+    const numberKeys = ["days", "count", "incomeMinor", "expenseMinor", "largestMinor"];
     if (dateKeys.some(key => !date(facts[key])) ||
       numberKeys.some(key => !Number.isSafeInteger(facts[key]) || facts[key] < 0) ||
-      !facts.days || !facts.baselineDays) {
+      !facts.days || !["overview", "income", "expense"].includes(facts.metric)) {
       return reply(res, 400, { error: "支出汇总格式无效" });
     }
-    task = { task: "advise", text: input.text,
-      facts: Object.fromEntries([...dateKeys, ...numberKeys].map(key => [key, facts[key]])) };
+    const baseline = facts.baseline;
+    const baselineKeys = ["days", "count", "recordedDays", "incomeMinor", "expenseMinor"];
+    const comparison = baseline && date(baseline.start) && date(baseline.end) &&
+      baselineKeys.every(key => Number.isSafeInteger(baseline[key]) && baseline[key] >= 0) && baseline.days > 0
+      ? Object.fromEntries(["start", "end", ...baselineKeys].map(key => [key, baseline[key]])) : undefined;
+    task = { task: "analyze", text: input.text, facts: {
+      ...Object.fromEntries([...dateKeys, ...numberKeys].map(key => [key, facts[key]])),
+      metric: facts.metric, category: shortText(facts.category, 24), view: shortText(facts.view, 12), baseline: comparison,
+      top: Array.isArray(facts.top) ? facts.top.slice(0, 5).filter(item =>
+        Number.isSafeInteger(item?.amountMinor) && item.amountMinor >= 0 &&
+        Number.isFinite(item.percent) && item.percent >= 0 && item.percent <= 100)
+        .map(({ amountMinor, percent }) => ({ amountMinor, percent })) : [],
+    } };
   }
   const connection = new AbortController();
   res.on("close", () => connection.abort());
@@ -119,7 +130,13 @@ async function proxy(req, res) {
     try {
       const data = await readJson(response.body, 64000);
       const content = data?.choices?.[0]?.message?.content;
-      intent = JSON.parse(typeof content === "string" ? content.trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi, "") : "");
+      const clean = typeof content === "string" ? content.trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/gi, "") : "";
+      try {
+        intent = JSON.parse(clean);
+      } catch (error) {
+        if (test || !clean || clean.startsWith("{") || clean.startsWith("[")) throw error;
+        intent = { kind: "message", text: [...clean].slice(0, 600).join("") };
+      }
     } catch {
       return reply(res, 502, { error: "模型未返回有效 JSON，请检查模型兼容性。" });
     }
