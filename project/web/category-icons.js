@@ -38,3 +38,27 @@ export const categoryIconPaths = {
   "messages-square": "<path d=\"M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z\" /><path d=\"M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1\" />",
   "heart": "<path d=\"M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z\" />"
 };
+
+// Fill enclosed regions behind the original strokes so interior details remain readable.
+const filledParts = {
+  utensils: [2], "shopping-bag": [0], package: [0], carrot: [0], apple: [0], cookie: [0],
+  dumbbell: [1, 4], "gamepad-2": [4], smartphone: [0], shirt: [0], paintbrush: [1],
+  house: [1], armchair: [1], accessibility: [0], users: [1], plane: [0],
+  "car-front": [3], cross: [0], "book-open": [1], "graduation-cap": [0],
+  "paw-print": [0, 1, 2, 3], "hand-coins": [3, 4], gift: [0], "briefcase-business": [3],
+  ellipsis: [0, 1, 2], "badge-dollar-sign": [0], mail: [0], "circle-dollar-sign": [0],
+  "credit-card": [0], "messages-square": [0], heart: [0],
+};
+const partialFills = {
+  utensils: '<path d="M3 7h8v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  baby: '<ellipse cx="12" cy="14" rx="6.5" ry="5.5"/>',
+  "bus-front": '<path d="M4 11h16v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+  cigarette: '<rect x="2" y="12" width="5" height="4" rx="1"/>',
+  laptop: '<path d="M4 16h16l1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45z"/>',
+  wallet: '<path d="M3 8h16v4h-1a2 2 0 0 0 0 4h1v4H5a2 2 0 0 1-2-2z"/>',
+  "chart-no-axes-combined": '<path d="M3 18h2v3H3zm4-4h2v7H7zm4 2h2v5h-2zm4-2h2v7h-2zm4-4h2v11h-2z"/>',
+};
+export const categoryIconFills = Object.fromEntries(Object.entries(categoryIconPaths).map(([key, path]) => {
+  const elements = path.match(/<[^>]+\/>/g) || [];
+  return [key, (partialFills[key] || "") + (filledParts[key] || []).map(index => elements[index]).join("")];
+}));

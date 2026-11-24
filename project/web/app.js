@@ -38,7 +38,7 @@ import {
   replaceLedger,
 } from "./storage.js";
 import { createAssistant } from "./assistant.js";
-import { categoryIconPaths } from "./category-icons.js";
+import { categoryIconFills, categoryIconPaths } from "./category-icons.js";
 
 const $ = (s) => document.querySelector(s),
   phone = $("#phone");
@@ -51,6 +51,19 @@ const E = (s) =>
       ],
   );
 const uid = () => crypto.randomUUID();
+const themes = [
+  ["amber", "深琥珀黄"], ["sage", "浅青绿"], ["blue", "浅雾蓝"],
+  ["plum", "浅灰紫"], ["ink-green", "深墨绿"], ["ink-blue", "深墨蓝"],
+];
+const themeStorageKey = "simple-ledger.theme";
+let activeTheme = themes[0][0];
+try {
+  const savedTheme = localStorage.getItem(themeStorageKey);
+  if (themes.some(([id]) => id === savedTheme)) activeTheme = savedTheme;
+} catch {
+  // The default theme also works when this browser blocks local preferences.
+}
+document.documentElement.dataset.theme = activeTheme;
 const cName = (id) =>
   state.data.categories.find((c) => c.id === id)?.name || "未知分类";
 const cById = (id) => state.data.categories.find((c) => c.id === id);
@@ -140,7 +153,7 @@ function entryRows(entries) {
       (g) =>
         `<div class="group-head"><span>${E(fullDate(g.date))}</span><span>${g.income ? `收入 ${formatYen(g.income)}` : ""}${g.income && g.expense ? " · " : ""}${g.expense ? `支出 ${formatYen(g.expense)}` : ""}</span></div><div class="list">${g.rows.map((e) => {
           const category = cById(e.categoryId), recent = state.savedEntry?.id === e.id && state.savedEntry.page === state.page;
-          return `<button class="record ${recent ? "record-saved" : ""}" data-action="detail" data-id="${E(e.id)}"><span class="ico" data-tone="${categoryTone(category)}">${categoryIcon(category)}</span><span class="record-text">${E(e.note || cName(e.categoryId))}${e.note ? `<small>${E(cName(e.categoryId))}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`;
+          return `<button class="record ${recent ? "record-saved" : ""}" data-action="detail" data-id="${E(e.id)}"><span class="ico category-icon">${categoryIcon(category)}</span><span class="record-text">${E(e.note || cName(e.categoryId))}${e.note ? `<small>${E(cName(e.categoryId))}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`;
         }).join("")}</div>`,
     )
     .join("");
@@ -188,14 +201,8 @@ function categoryGraphic(category) {
   return legacyIcons[category?.iconKey]?.[0] || "ellipsis";
 }
 function categoryIcon(category) {
-  return svgIcon(categoryIconPaths[categoryGraphic(category)]);
-}
-function categoryTone(category) {
-  const key = categoryGraphic(category);
-  if (["utensils", "apple", "cookie", "hand-coins"].includes(key)) return "amber";
-  if (["shopping-bag", "package", "gift", "shirt", "paintbrush", "gamepad-2"].includes(key)) return "plum";
-  if (["bus-front", "car-front", "house", "plane", "smartphone", "laptop", "credit-card"].includes(key)) return "blue";
-  return "green";
+  const graphic = categoryGraphic(category);
+  return svgIcon(`<g class="category-fill" stroke="none">${categoryIconFills[graphic]}</g>${categoryIconPaths[graphic]}`);
 }
 function uiIcon(key) { return svgIcon(uiPaths[key]); }
 function seg(items, value, action) {
@@ -234,7 +241,7 @@ function detail() {
 function entryPage() {
   const d = state.entry;
   const cats = activeCategories(d.type, true).filter((c) => !c.hidden || c.id === d.categoryId);
-  const categories = cats.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico" data-tone="${categoryTone(c)}">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
+  const categories = cats.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico category-icon">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
   return `<div class="entry-layout">
     ${seg([[EXPENSE, "支出"], [INCOME, "收入"]], d.type, "entry-type")}
     <div class="row category-heading"><h2 class="heading">选择分类</h2><button class="plain" data-action="category-manage">管理分类</button></div>
@@ -255,7 +262,7 @@ function categoryRanks(entries, type, click = true) {
     return empty(`暂无${typeName(type)}分类数据`, "这个周期没有可统计的记录。");
   return `<div class="card rank-list">${ranked.map((r) => {
     const tag = click ? "button" : "div";
-    return `<${tag} class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span class="rank-label"><span class="ico" data-tone="${categoryTone(r.category)}">${categoryIcon(r.category)}</span>${E(r.category.name)}</span><span class="rank-value"><strong>${formatYen(r.amountMinor)}</strong><span class="micro">${r.percent.toFixed(1)}%</span></span></div><div class="bar" aria-hidden="true"><i style="width:${r.percent}%"></i></div></${tag}>`;
+    return `<${tag} class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span class="rank-label"><span class="ico category-icon">${categoryIcon(r.category)}</span>${E(r.category.name)}</span><span class="rank-value"><strong>${formatYen(r.amountMinor)}</strong><span class="micro">${r.percent.toFixed(1)}%</span></span></div><div class="bar" aria-hidden="true"><i style="width:${r.percent}%"></i></div></${tag}>`;
   }).join("")}</div>`;
 }
 function chart(points) {
@@ -375,7 +382,7 @@ function categoryManage() {
     active = list.filter((c) => !c.hidden),
     hidden = list.filter((c) => c.hidden);
   const item = (c) =>
-    `<div class="menu" draggable="${!isDiningCategory(c)}" data-catdrag="${E(c.id)}"><span class="ico" data-tone="${categoryTone(c)}">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · ${isDiningCategory(c) ? "置顶" : "拖动排序"}</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button>${isDiningCategory(c) ? "" : `<button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button>`}</div>`;
+    `<div class="menu" draggable="${!isDiningCategory(c)}" data-catdrag="${E(c.id)}"><span class="ico category-icon">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · ${isDiningCategory(c) ? "置顶" : "拖动排序"}</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button>${isDiningCategory(c) ? "" : `<button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button>`}</div>`;
   return `${seg(
     [
       [EXPENSE, "支出"],
@@ -387,7 +394,12 @@ function categoryManage() {
 }
 function settings() {
   const aiSettings = '<div class="list"><button class="menu" data-action="assistant-settings"><span>AI 助手设置</span><span class="chev">›</span></button></div>';
-  return aiSettings + `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。请定期导出备份；更换地址或浏览器不会自动同步。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
+  const themeOptions = themes.map(([id, label]) => `<label class="theme-option" data-theme-sample="${id}">
+    <input type="radio" name="app-theme" value="${id}" ${id === activeTheme ? "checked" : ""}>
+    <span class="theme-swatch" aria-hidden="true"><span></span><span></span></span><span>${label}</span>
+  </label>`).join("");
+  return `<fieldset class="theme-picker"><legend>外观主题</legend><div class="theme-options">${themeOptions}</div><p id="themeStatus" class="error" role="status"></p></fieldset>` +
+    aiSettings + `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。请定期导出备份；更换地址或浏览器不会自动同步。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
 }
 
 const palette = [
@@ -1618,6 +1630,19 @@ phone.addEventListener("scroll", (event) => {
   if (event.target.classList?.contains("assistant-thread")) updateChatJump(event.target);
 }, true);
 phone.addEventListener("change", (event) => {
+  if (event.target.name === "app-theme") {
+    const value = event.target.value;
+    if (!themes.some(([id]) => id === value)) return;
+    activeTheme = value;
+    document.documentElement.dataset.theme = value;
+    try {
+      localStorage.setItem(themeStorageKey, value);
+      $("#themeStatus").textContent = "";
+    } catch {
+      $("#themeStatus").textContent = "主题已切换，但浏览器无法保存配色。";
+    }
+    return;
+  }
   if (event.target.id !== "statsPeriod") return;
   state.statsPeriod = event.target.value;
   state.trendPoint = null;
