@@ -208,7 +208,7 @@ function categoryGraphic(category) {
 }
 function categoryIcon(category) {
   const graphic = categoryGraphic(category);
-  return svgIcon(`<g class="category-fill" data-graphic="${graphic}" stroke="none">${categoryIconFills[graphic]}</g>${categoryIconPaths[graphic]}`);
+  return svgIcon(`<g class="category-fill" stroke="none">${categoryIconFills[graphic]}</g>${categoryIconPaths[graphic]}`);
 }
 function uiIcon(key) { return svgIcon(uiPaths[key]); }
 function seg(items, value, action) {

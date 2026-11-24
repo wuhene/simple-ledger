@@ -1522,9 +1522,6 @@ body::-webkit-scrollbar,
   background: var(--soft);
   border-color: color-mix(in srgb, var(--action) 75%, var(--brand));
 }
-.entry-content .cat .category-fill:is([data-graphic="utensils"], [data-graphic="shopping-bag"], [data-graphic="package"], [data-graphic="bus-front"]) {
-  fill: var(--action);
-}
 .entry-content .cat.on .category-icon {
   --category-fill: color-mix(in srgb, var(--action) 60%, white);
   background: color-mix(in srgb, var(--action) 32%, white);
