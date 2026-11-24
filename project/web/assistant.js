@@ -220,15 +220,16 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
   }
 
   function page() {
-    return '<div class="ai-chat" aria-live="polite">' +
+    return '<div class="assistant-thread" role="region" aria-label="聊天记录" tabindex="0"><div class="ai-chat" aria-live="polite">' +
       (!configured() ? '<div class="card"><strong>先连接一个模型</strong><p class="micro">在设置中填写 API 地址和模型 ID，即可用 AI 记账或查账。</p></div>' :
         !chat.length ? '<div class="card"><strong>说一句，记账或查账</strong><p class="micro">例如「今天中午吃叉烧饭花了28元」。</p>' +
         '<div class="ai-actions">' + button("example-record", "试一句记账") + button("example-stats", "试查本月收支") + '</div></div>' : "") +
       (historyError ? '<p role="status" class="error">' + E(historyError) + '</p>' : "") +
-      chat.map(chatItem).join("") + draftCard() + '</div>' +
+      chat.map(chatItem).join("") + draftCard() + '</div></div>' +
+      '<div class="assistant-dock"><button type="button" class="chat-latest" data-action="assistant-latest" hidden>回到最新 ↓</button>' +
       '<form id="assistant-chat" class="ai-composer"><input aria-label="聊天消息" name="message" class="field" maxlength="600" autocomplete="off"' +
       ' placeholder="说一句，记账或查账" value="' + E(input) + '"' + (busy || !configured() ? " disabled" : "") + '><button class="primary"' +
-      (busy || !configured() ? " disabled" : "") + '>' + (busy && !draft ? "处理中…" : "发送") + '</button></form>';
+      (busy || !configured() ? " disabled" : "") + '>' + (busy && !draft ? "处理中…" : "发送") + '</button></form></div>';
   }
 
   async function callModel(settings, action, text = "", signal, facts) {
