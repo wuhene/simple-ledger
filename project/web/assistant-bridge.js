@@ -59,7 +59,7 @@ async function proxy(req, res) {
     }
     if (length > 12000) return reply(res, 413, { error: "请求太长" });
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (!input || !["test", "interpret"].includes(input.action) ||
+    if (!input || !["test", "interpret", "advise"].includes(input.action) ||
       typeof input.base !== "string" || typeof input.model !== "string" || !input.model.trim() ||
       typeof input.key !== "string" || /[\r\n]/.test(input.key)) throw new Error();
   } catch {
@@ -79,13 +79,27 @@ async function proxy(req, res) {
   const date = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
   const previous = input.lastQuery;
   const pending = input.pending;
-  const task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } : {
+  const advice = input.action === "advise";
+  let task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } : {
     today: date(input.today),
     text: input.text,
+    previousInput: shortText(input.previousInput, 300) || undefined,
     lastQuery: previous && { start: date(previous.start), end: date(previous.end),
       metric: shortText(previous.metric, 8), category: shortText(previous.category, 24) },
     pending: pending && { original: shortText(pending.original, 600), latest: shortText(pending.latest, 600), question: shortText(pending.question, 200) },
   };
+  if (advice) {
+    const facts = input.facts || {};
+    const dateKeys = ["start", "end", "baselineStart", "baselineEnd"];
+    const numberKeys = ["days", "amountMinor", "baselineDays", "baselineMinor", "baselineRecordedDays"];
+    if (dateKeys.some(key => !date(facts[key])) ||
+      numberKeys.some(key => !Number.isSafeInteger(facts[key]) || facts[key] < 0) ||
+      !facts.days || !facts.baselineDays) {
+      return reply(res, 400, { error: "支出汇总格式无效" });
+    }
+    task = { task: "advise", text: input.text,
+      facts: Object.fromEntries([...dateKeys, ...numberKeys].map(key => [key, facts[key]])) };
+  }
   const connection = new AbortController();
   res.on("close", () => connection.abort());
   try {

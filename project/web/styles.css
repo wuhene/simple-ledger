@@ -1009,6 +1009,7 @@ body::-webkit-scrollbar,
 .ai-chat { display: grid; gap: 9px; align-content: start; }
 .ai-chat .card { margin: 0; }
 .ai-bubble {
+  white-space: pre-line;
   margin: 0;
   padding: 10px 13px;
   border-radius: 15px 15px 15px 5px;

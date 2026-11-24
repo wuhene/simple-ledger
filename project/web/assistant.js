@@ -1,4 +1,4 @@
-import { EXPENSE, INCOME, categoryTotals, entriesInBounds, localToday, money, sortEntries, totals } from "./model.js";
+import { EXPENSE, INCOME, categoryTotals, dayCount, entriesInBounds, localToday, money, shiftDate, sortEntries, totals } from "./model.js";
 import { putEntry, removeEntry } from "./storage.js";
 import { validateIntent } from "./assistant-model.js";
 
@@ -6,9 +6,9 @@ const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>
 const typeName = type => type === INCOME ? "收入" : "支出";
 
 export function createAssistant({ getData, escape: E, render, reload, isOpen }) {
-  let config = { base: "", model: "", key: "", consent: false };
+  let config = { base: "", model: "", key: "", consent: false, shareSummary: false };
   let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
-  let chat = [];
+  let chat = [], previousInput = "";
   const say = (text, user = false) => {
     chat.push({ kind: "text", text, user });
   };
@@ -27,7 +27,9 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       (config.key ? "已设置 · 留空沿用" : "模型需要认证时填写") + '"></label>' +
       '<label class="ai-consent"><input name="consent" type="checkbox"' + (config.consent ? " checked" : "") +
       '>允许把输入及必要上下文发给此模型服务</label>' +
-      paragraph(E, "每条消息由所选模型识别。连接测试仅发送示例句，账本和统计结果留在本机。配置在刷新前有效。") +
+      '<label class="ai-consent"><input name="shareSummary" type="checkbox"' + (config.shareSummary ? " checked" : "") +
+      '>允许模型使用支出汇总给个性化建议</label>' +
+      paragraph(E, "个性化建议仅使用支出总额和对比期汇总，不发送流水、分类或备注。关闭时本机仍可说明对比结果。配置在刷新前有效。") +
       '<div class="ai-actions"><button class="primary" name="action" value="save"' + (testing ? " disabled" : "") + '>保存设置</button>' +
       '<button class="outline" name="action" value="test"' + (testing ? " disabled" : "") + '>' + (testing ? "测试中…" : "测试连接") + '</button>' +
       button("clear-config", "清除配置", "plain", testing) + '</div><p role="status" class="micro">' + E(status) + '</p></form>';
@@ -61,6 +63,36 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     }
     return { kind: "report", id: crypto.randomUUID(), query, amount: totals(rows), type, ranking,
       details, empty: !rows.length, selected: ranking.find(item => item.category.name === query.category)?.category.id || "" };
+  }
+
+  function spendingFacts(query) {
+    const entries = getData().entries;
+    const spend = bounds => entriesInBounds(entries, bounds).filter(item => item.type === EXPENSE);
+    const days = dayCount(query), referenceDays = days === 1 ? 7 : days;
+    const baseline = { start: shiftDate(query.start, -referenceDays), end: shiftDate(query.start, -1) };
+    const current = spend(query), previous = spend(baseline);
+    return {
+      start: query.start, end: query.end, days, amountMinor: totals(current).expense,
+      baselineStart: baseline.start, baselineEnd: baseline.end, baselineDays: referenceDays,
+      baselineMinor: totals(previous).expense, baselineRecordedDays: new Set(previous.map(item => item.businessDate)).size,
+    };
+  }
+
+  function spendingSummary(facts) {
+    if (getData().preferences.hideAmountsByDefault) {
+      return "金额已隐藏。判断花得多不多，可以先和自己平时的日均支出或预算比较。";
+    }
+    if (!facts.amountMinor) return "这段时间没有记下支出。记录可能不完整，暂时没法判断花得多不多。";
+    const lead = (facts.days === 1 ? "这一天" : "这段时间") + "记了 " + displayMoney(facts.amountMinor) + "。";
+    if (facts.baselineRecordedDays < Math.min(3, facts.baselineDays)) {
+      return lead + "对比期的支出记录太少，暂时判断不了算不算高。";
+    }
+    const average = Math.round(facts.amountMinor / facts.days);
+    const normal = Math.round(facts.baselineMinor / facts.baselineDays);
+    const change = average > normal ? "高于" : average < normal ? "低于" : "与";
+    return lead + "按已记账的数据，日均 " + displayMoney(average) + "，" + change + "此前 " +
+      facts.baselineDays + " 天的日均 " + displayMoney(normal) + (change === "与" ? "相同。" : "。") +
+      "可以再看看是否有一次性的开销。";
   }
 
   function reportCard(report) {
@@ -114,19 +146,22 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       (busy || !configured() ? " disabled" : "") + '>' + (busy && !draft ? "处理中…" : "发送") + '</button></form>';
   }
 
-  async function callModel(settings, action, text = "", signal) {
+  async function callModel(settings, action, text = "", signal, facts) {
     const today = action === "test" ? "2026-01-02" : localToday();
     let response;
     try {
       response = await fetch("./ai/api", { method: "POST", signal, headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, base: settings.base, model: settings.model, key: settings.key,
-          ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending } : {}) }) });
+          ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending, previousInput } :
+            action === "advise" ? { text, facts } : {}) }) });
     } catch {
       throw new Error("无法连接本机调试服务，请运行 npm start。");
     }
     const data = await response.json().catch(() => null);
     if (!response.ok || !data) throw new Error(data?.error || "无法连接本机调试服务，请运行 npm start。");
-    return validateIntent(data.intent, today);
+    const result = validateIntent(data.intent, today);
+    if (action === "advise" && result.kind !== "message") throw new Error("模型未返回建议");
+    return result;
   }
 
   async function submitConfig(form, action) {
@@ -134,7 +169,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     const fields = new FormData(form);
     const base = fields.get("base").trim(), key = fields.get("key").trim();
     const next = { base, model: fields.get("model").trim(),
-      key: key || (base === config.base ? config.key : ""), consent: fields.has("consent") };
+      key: key || (base === config.base ? config.key : ""), consent: fields.has("consent"),
+      shareSummary: fields.has("shareSummary") };
     if (action === "test" && (!next.base || !next.model || !next.consent)) {
       form.querySelector('[role="status"]').textContent = "请填写 API 地址和模型 ID，并同意发送请求。";
       return;
@@ -173,21 +209,44 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
     }
     say(text, true);
     input = "";
+    const settings = config;
     const currentRequest = new AbortController();
     request = currentRequest;
     busy = true;
     refresh();
     try {
-      const intent = await callModel(config, "interpret", text, currentRequest.signal);
+      const intent = await callModel(settings, "interpret", text, currentRequest.signal);
       if (request !== currentRequest) return;
+      previousInput = text.slice(0, 300);
       if (intent.kind === "record") {
         const category = available().find(item => item.name === intent.category && item.type === intent.type);
         draft = { id: crypto.randomUUID(), type: intent.type, amount: (intent.amountMinor / 100).toFixed(2),
           date: intent.date, categoryId: category?.id || "", note: intent.note };
         context = { lastQuery: context?.lastQuery };
-        say(category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。");
-      } else if (intent.kind === "stats") {
-        chat.push(createReport(intent));
+        say(intent.text || (category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。"));
+      } else if (intent.kind === "stats" || intent.kind === "insight") {
+        let response = intent.text;
+        if (intent.kind === "insight") {
+          const facts = spendingFacts(intent);
+          response = spendingSummary(facts);
+          if (config === settings && settings.shareSummary && !getData().preferences.hideAmountsByDefault && facts.amountMinor &&
+            facts.baselineRecordedDays >= Math.min(3, facts.baselineDays)) {
+            try {
+              const advice = await callModel(settings, "advise", text, currentRequest.signal, facts);
+              response += "\n\n" + advice.text;
+            } catch {
+              // The on-device comparison is still available when model commentary fails.
+            }
+            if (request !== currentRequest) return;
+          }
+        } else if (!response) {
+          const { income, expense } = totals(entriesInBounds(getData().entries, intent));
+          response = intent.metric === "income" ? "这段时间记了 " + displayMoney(income) + " 收入。" :
+            intent.metric === "expense" ? "这段时间记了 " + displayMoney(expense) + " 支出。" :
+            "这段时间记了 " + displayMoney(income) + " 收入、" + displayMoney(expense) + " 支出。";
+        }
+        if (response) say(response);
+        if (intent.kind === "stats" || intent.showCard) chat.push(createReport(intent));
         context = { lastQuery: { start: intent.start, end: intent.end, metric: intent.metric, category: intent.category } };
       } else if (intent.kind === "clarify") {
         const pending = { original: context?.pending?.original || text, latest: text, question: intent.question };
@@ -245,11 +304,12 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen }) 
       busy = false;
       input = "";
       context = null;
+      previousInput = "";
       draft = null;
       chat = [];
       refresh();
     } else if (action === "clear-config" && !testing) {
-      config = { base: "", model: "", key: "", consent: false };
+      config = { base: "", model: "", key: "", consent: false, shareSummary: false };
       status = "已清除配置。";
       refresh();
     } else if (action === "example-record") {
