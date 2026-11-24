@@ -52,7 +52,7 @@ const E = (s) =>
   );
 const uid = () => crypto.randomUUID();
 const themes = [
-  ["amber", "深琥珀黄"], ["sage", "浅青绿"], ["blue", "浅雾蓝"],
+  ["amber", "亮黄"], ["sage", "浅青绿"], ["blue", "浅雾蓝"],
   ["plum", "浅灰紫"], ["ink-green", "深墨绿"], ["ink-blue", "深墨蓝"],
 ];
 const themeStorageKey = "simple-ledger.theme";

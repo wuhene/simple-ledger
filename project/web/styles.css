@@ -733,11 +733,11 @@ label {
 .theme-option[data-theme-sample="amber"] {
   --brand: #795309;
   --brand-dark: #523907;
-  --action: #d7a124;
-  --action-ink: #241a0a;
-  --soft: #faf0d2;
-  --top-surface: #fcf0d0;
-  --top-divider: #e9d9af;
+  --action: #ffda44;
+  --action-ink: #241d0c;
+  --soft: #fff3bd;
+  --top-surface: #ffda44;
+  --top-divider: #d9ba38;
 }
 :root[data-theme="sage"],
 .theme-option[data-theme-sample="sage"] {
@@ -1256,6 +1256,7 @@ body::-webkit-scrollbar,
 }
 .category-icon .category-fill { fill: var(--category-fill); }
 .category-icon svg { color: inherit; }
+:root[data-theme="amber"] .category-icon { --category-fill: var(--action); }
 .entry-amount-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
@@ -1502,6 +1503,11 @@ body::-webkit-scrollbar,
   --category-fill: color-mix(in srgb, var(--action) 60%, white);
   background: color-mix(in srgb, var(--action) 32%, white);
   color: var(--brand-dark);
+}
+:root[data-theme="amber"] .entry-content .cat.on .category-icon {
+  --category-fill: var(--action);
+  background: var(--action);
+  color: var(--action-ink);
 }
 .entry-content .cat-check { right: calc(50% - 24px); }
 .ai-spark, .ai-starter-mark { background: var(--soft); }
