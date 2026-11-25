@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { cleanClues, cleanTerms } from "./ledger-search.js";
-import { rankLimit } from "./assistant-model.js";
+import { cleanConversationTurns, cleanResultReferences, rankLimit } from "./assistant-model.js";
 
 const port = Number(process.env.LEDGER_WEB_PORT || 4173);
 const assets = {
@@ -61,10 +61,10 @@ async function proxy(req, res) {
     let length = 0;
     for await (const chunk of req) {
       length += chunk.length;
-      if (length > 20000) break;
+      if (length > 40000) break;
       chunks.push(chunk);
     }
-    if (length > 20000) return reply(res, 413, { error: "请求太长" });
+    if (length > 40000) return reply(res, 413, { error: "请求太长" });
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (!input || !["test", "interpret", "analyze"].includes(input.action) ||
       typeof input.base !== "string" || typeof input.model !== "string" || !input.model.trim() ||
@@ -86,9 +86,8 @@ async function proxy(req, res) {
   const date = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
   const previous = input.lastQuery;
   const result = input.lastResult;
-  const turns = Array.isArray(input.recentTurns) ? input.recentTurns.slice(-6).flatMap(item =>
-    ["user", "assistant"].includes(item?.role) && typeof item.text === "string"
-      ? [{ role: item.role, text: shortText(item.text, 180) }] : []) : [];
+  const turns = cleanConversationTurns(input.recentTurns);
+  const refs = cleanResultReferences(input.resultRefs);
   const pending = input.pending;
   const analysis = input.action === "analyze";
   let task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } : {
@@ -96,6 +95,7 @@ async function proxy(req, res) {
     text: input.text,
     previousInput: shortText(input.previousInput, 300) || undefined,
     recentTurns: turns.length ? turns : undefined,
+    resultRefs: refs.length ? refs : undefined,
     lastResult: result && date(result.start) && date(result.end) ? {
       question: shortText(result.question, 300), start: date(result.start), end: date(result.end),
       category: shortText(result.category, 24), view: "entries",
@@ -122,7 +122,8 @@ async function proxy(req, res) {
     const comparison = baseline && date(baseline.start) && date(baseline.end) &&
       baselineKeys.every(key => Number.isSafeInteger(baseline[key]) && baseline[key] >= 0) && baseline.days > 0
       ? Object.fromEntries(["start", "end", ...baselineKeys].map(key => [key, baseline[key]])) : undefined;
-    task = { task: "analyze", text: input.text, facts: {
+    task = { task: "analyze", text: input.text, recentTurns: turns.length ? turns : undefined,
+      resultRefs: refs.length ? refs : undefined, facts: {
       ...Object.fromEntries([...dateKeys, ...numberKeys].map(key => [key, facts[key]])),
       metric: facts.metric, category: shortText(facts.category, 24), view: shortText(facts.view, 12), baseline: comparison,
       top: Array.isArray(facts.top) ? facts.top.slice(0, 5).filter(item =>

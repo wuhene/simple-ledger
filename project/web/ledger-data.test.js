@@ -5,7 +5,7 @@ import { packLedger, unpackLedger } from "./ledger-backup.js";
 import { applyEntry, rollupAchievements, summarizeRollups } from "./ledger-rollups.js";
 import { cleanClues, entryTokens, matchScore, queryTokens } from "./ledger-search.js";
 import { EXPENSE, SCHEMA_VERSION, initialCategories } from "./model.js";
-import { isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
+import { cleanConversationTurns, cleanResultReferences, isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
 
 const first = {
   id: "one", categoryId: "expense-0", type: EXPENSE, businessDate: "2019-02-01", amountMinor: 8800,
@@ -23,6 +23,23 @@ test("金额排行支持未指定日期，区分前十笔、前十个月和对�
   assert.equal(isResultDateFollowUp("刚才没写年份，改看2025年"), false);
   const intent = validateIntent({ kind: "stats", metric: "expense", category: "餐饮", order: "amount-desc", limit: 10 }, "2026-11-25");
   assert.deepEqual([intent.start, intent.end, intent.view, intent.limit], ["1900-01-01", "2026-11-25", "entries", 10]);
+});
+
+test("上下文保留文字、卡片引用和账务状态，去掉逐笔流水字段", () => {
+  const turns = cleanConversationTurns([
+    { role: "user", text: "看上个月餐饮" }, { role: "assistant", resultId: "r2", entries: [first] },
+    { role: "assistant", recordState: "saved", date: first.businessDate, type: EXPENSE, note: first.note },
+  ]);
+  assert.deepEqual(turns, [
+    { role: "user", text: "看上个月餐饮" }, { role: "assistant", resultId: "r2" },
+    { role: "assistant", recordState: "saved", date: first.businessDate, type: EXPENSE },
+  ]);
+  const refs = cleanResultReferences([{ id: "r2", start: first.businessDate, end: first.businessDate,
+    blocks: ["totals", "entries"], dates: [first.businessDate], expenseMinor: 8800, entries: [first], location: { latitude: 39.9 } }]);
+  assert.equal(refs[0].expenseMinor, 8800);
+  assert.deepEqual(refs[0].dates, [first.businessDate]);
+  assert.equal("entries" in refs[0] || "location" in refs[0], false);
+  assert.equal(validateIntent({ kind: "result-follow-up", resultId: "r2", view: "entries" }).resultId, "r2");
 });
 
 test("短词、原话及任意自定义线索可检索，菜名不等同于消费城市", () => {

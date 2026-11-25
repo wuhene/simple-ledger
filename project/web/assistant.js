@@ -1,6 +1,6 @@
 import { EXPENSE, INCOME, categoryTotals, dayCount, localToday, money, shiftDate, sortEntries, totals } from "./model.js";
 import { clearLedger, loadAssistantHistory, putEntry, putMeta, queryEntries, removeEntry, saveAssistantSession } from "./storage.js";
-import { isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
+import { cleanConversationTurns, cleanResultReferences, isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
 import { cleanClues } from "./ledger-search.js";
 
 const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>';
@@ -366,15 +366,54 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     return { ...result, question };
   }
 
-  function recentConversation() {
-    return chat.slice(0, -1).slice(-12).flatMap(item => {
-      if (item.kind === "text") return [{ role: item.user ? "user" : "assistant", text: item.text.slice(0, 180) }];
-      if (item.kind === "answer" && !item.snapshot) {
-        const text = item.blocks.filter(block => block.type === "paragraph").map(block => block.text).join(" ").slice(0, 180);
-        if (text) return [{ role: "assistant", text }];
+  function conversationContext() {
+    const turns = [], results = [];
+    const hidden = getData().preferences.hideAmountsByDefault;
+    for (let i = chat.length - 2; i >= 0 && (turns.length < 12 || results.length < 6); i--) {
+      const item = chat[i];
+      let turn;
+      if (item.snapshot?.facts || item.kind === "report") {
+        const id = "r" + (i + 1);
+        if (results.length < 6) {
+          const { facts, entries } = item.snapshot || { facts: item.query, entries: [] };
+          const blocks = item.blocks?.map(block => block.type) || ["totals", "categories"];
+          const question = item.question || chat.slice(0, i).findLast(entry => entry.kind === "text" && entry.user)?.text;
+          results.push({ id, question, start: facts.start, end: facts.end, category: facts.category,
+            metric: facts.metric, view: facts.view, blocks, order: facts.order || item.snapshot?.query?.order, limit: facts.limit,
+            count: facts.count, shown: blocks.includes("entries") ? entries.length : undefined,
+            dates: blocks.includes("entries") ? [...new Set(entries.map(entry => entry.date))].slice(0, 8) : [],
+            comparison: facts.baseline && blocks.includes("comparison")
+              ? { start: facts.baseline.start, end: facts.baseline.end, days: facts.baseline.days,
+                ...(!hidden ? { incomeMinor: facts.baseline.incomeMinor, expenseMinor: facts.baseline.expenseMinor } : {}) } : undefined,
+            ...(!hidden ? {
+              interpretation: item.blocks?.filter(block => block.type === "paragraph").map(block => block.text).join(" "),
+              incomeMinor: (facts.metric !== "expense" && blocks.includes("totals")) || blocks.includes("comparison")
+                ? facts.incomeMinor ?? item.amount?.income : undefined,
+              expenseMinor: (facts.metric !== "income" && blocks.includes("totals")) || blocks.includes("comparison")
+                ? facts.expenseMinor ?? item.amount?.expense : undefined,
+              categories: blocks.includes("categories") ? item.snapshot?.ranking : undefined,
+            } : {}),
+          });
+          turn = { role: "assistant", resultId: id };
+        }
+      } else if (item.kind === "text") {
+        turn = { role: item.user ? "user" : "assistant", text: item.text };
+      } else if (item.kind === "answer") {
+        const text = item.blocks.flatMap(block => block.type === "bullets" ? block.items : block.text || []).join("\n");
+        turn = { role: "assistant", text };
+      } else if (item.kind === "receipt") {
+        turn = { role: "assistant", recordState: item.undone ? "undone" : "saved", date: item.entry.businessDate, type: item.entry.type };
       }
-      return [];
-    }).slice(-6);
+      if (turn && turns.length < 12) turns.push(turn);
+    }
+    return { recentTurns: cleanConversationTurns(turns.reverse()), resultRefs: cleanResultReferences(results.reverse()) };
+  }
+
+  function referencedResult(id, resultRefs) {
+    const reference = resultRefs.find(item => item.id === id);
+    if (!reference) return null;
+    const item = chat[Number(id.slice(1)) - 1];
+    return { ...item, question: reference.question };
   }
 
   async function resultWithDates(previous) {
@@ -390,7 +429,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     ] };
   }
 
-  async function callModel(settings, action, text = "", signal, facts) {
+  async function callModel(settings, action, text = "", signal, details) {
     const today = action === "test" ? "2026-01-02" : localToday();
     const result = action === "interpret" ? previousEntryResult() : null;
     const resultFacts = result?.snapshot.facts;
@@ -399,10 +438,10 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       response = await fetch("./ai/api", { method: "POST", signal, headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, base: settings.base, model: settings.model, key: settings.key,
           ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending, previousInput,
-            recentTurns: recentConversation(), lastResult: resultFacts && { question: result.question,
+            ...details, lastResult: resultFacts && { question: result.question,
               start: resultFacts.start, end: resultFacts.end, category: resultFacts.category,
               order: resultFacts.order, limit: resultFacts.limit, view: "entries" } } :
-            action === "analyze" ? { text, facts } : {}) }) });
+            action === "analyze" ? { text, ...details } : {}) }) });
     } catch {
       throw new Error("无法连接本机调试服务，请运行 npm start。");
     }
@@ -466,16 +505,33 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     persistSession();
     refresh();
     try {
+      const conversation = conversationContext();
       const previousResult = previousEntryResult();
-      const intent = previousResult && isResultDateFollowUp(text) ? { kind: "result-dates" } :
-        await callModel(settings, "interpret", text, currentRequest.signal);
+      const anotherCategory = previousResult?.snapshot.facts.category &&
+        getData().categories.some(category => category.name !== previousResult.snapshot.facts.category && text.includes(category.name));
+      const intent = previousResult && !anotherCategory && isResultDateFollowUp(text) && !/上上|第.{1,3}张|更早/.test(text) ? { kind: "result-dates" } :
+        await callModel(settings, "interpret", text, currentRequest.signal, conversation);
       if (request !== currentRequest) return;
       previousInput = text.slice(0, 300);
-      if (intent.kind === "result-dates" && previousResult) {
-        const answer = await resultWithDates(previousResult);
+      const reference = intent.resultId ? referencedResult(intent.resultId, conversation.resultRefs) : previousResult;
+      if (intent.kind === "result-dates" && reference?.snapshot?.entries?.length) {
+        const answer = await resultWithDates(reference);
         if (request !== currentRequest) return;
         context = { lastQuery: answer.snapshot.query || context?.lastQuery };
         chat.push(answer);
+        return;
+      }
+      if (intent.kind === "result-follow-up" && reference) {
+        const source = reference.snapshot;
+        const facts = source?.facts || reference.query;
+        const query = { ...(source?.query || { kind: "stats", start: facts.start, end: facts.end, category: facts.category,
+          metric: facts.metric || "overview", comparison: facts.baseline }), view: intent.view };
+        if (intent.view !== "entries") Object.assign(query, { order: "", limit: 0 });
+        const snapshot = await analysisSnapshot(query);
+        if (request !== currentRequest) return;
+        const blocks = fallbackAnswer(query, snapshot, getData().preferences.hideAmountsByDefault);
+        chat.push({ kind: "answer", blocks, snapshot, question: reference.question });
+        context = { lastQuery: query };
         return;
       }
       if (intent.kind === "record") {
@@ -499,7 +555,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
           progress = "正在分析账本";
           refresh();
           try {
-            const answer = await callModel(settings, "analyze", text, currentRequest.signal, snapshot.facts);
+            const answer = await callModel(settings, "analyze", text, currentRequest.signal, { ...conversation, facts: snapshot.facts });
             blocks = answer.kind === "answer" ? answer.blocks :
               [{ type: "paragraph", text: answer.text }, ...blocks.filter(block => block.type !== "paragraph")];
           } catch {
@@ -517,7 +573,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       } else {
         context = { lastQuery: context?.lastQuery };
         if (intent.kind === "answer") chat.push({ kind: "answer", blocks: intent.blocks });
-        else say(intent.text || "这段会话还没有可补充日期的流水结果。");
+        else say(intent.text || "我没找到你指的那张结果。可以告诉我那次查的分类或时间范围。");
       }
     } catch (error) {
       if (request === currentRequest) {

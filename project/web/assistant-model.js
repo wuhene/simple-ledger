@@ -3,6 +3,52 @@ import { cleanClues, cleanTerms } from "./ledger-search.js";
 
 const dataBlocks = ["totals", "categories", "entries", "comparison"];
 const numerals = "一二三四五六七八九";
+const resultIdPattern = /^r[1-9]\d{0,7}$/;
+const clip = (value, length) => typeof value === "string" ? [...value].slice(0, length).join("") : undefined;
+const dateField = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+const countField = value => Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+export function cleanConversationTurns(turns) {
+  if (!Array.isArray(turns)) return [];
+  return turns.slice(-12).flatMap(turn => {
+    if (turn?.role === "assistant" && resultIdPattern.test(turn.resultId)) return [{ role: "assistant", resultId: turn.resultId }];
+    if (turn?.role === "assistant" && ["saved", "undone"].includes(turn.recordState)) {
+      return [{ role: "assistant", recordState: turn.recordState, date: dateField(turn.date),
+        type: [INCOME, EXPENSE].includes(turn.type) ? turn.type : undefined }];
+    }
+    const text = clip(turn?.text, 320);
+    return text && ["user", "assistant"].includes(turn.role) ? [{ role: turn.role, text }] : [];
+  });
+}
+
+export function cleanResultReferences(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(-6).flatMap(item => {
+    if (!item || !resultIdPattern.test(item.id) || !dateField(item.start) || !dateField(item.end)) return [];
+    const comparison = item.comparison;
+    return [{
+      id: item.id, question: clip(item.question, 240), start: item.start, end: item.end,
+      interpretation: clip(item.interpretation, 280),
+      category: clip(item.category, 12), metric: ["income", "expense", "overview"].includes(item.metric) ? item.metric : undefined,
+      view: dataBlocks.includes(item.view) ? item.view : undefined,
+      blocks: Array.isArray(item.blocks) ? [...new Set(item.blocks.filter(type => dataBlocks.includes(type)))] : [],
+      order: ["latest", "amount-desc"].includes(item.order) ? item.order : undefined,
+      limit: typeof item.limit === "number" ? rankLimit(item.limit) || undefined : undefined,
+      count: countField(item.count), shown: countField(item.shown),
+      dates: Array.isArray(item.dates) ? [...new Set(item.dates.slice(0, 8).filter(dateField))] : [],
+      incomeMinor: countField(item.incomeMinor), expenseMinor: countField(item.expenseMinor),
+      comparison: dateField(comparison?.start) && dateField(comparison?.end) ? {
+        start: comparison.start, end: comparison.end, days: countField(comparison.days),
+        incomeMinor: countField(comparison.incomeMinor), expenseMinor: countField(comparison.expenseMinor),
+      } : undefined,
+      categories: Array.isArray(item.categories) ? item.categories.slice(0, 3).flatMap(category => {
+        const name = clip(category?.name, 12);
+        return name ? [{ name, amountMinor: countField(category.amountMinor),
+          percent: Number.isFinite(category.percent) && category.percent >= 0 && category.percent <= 100 ? category.percent : undefined }] : [];
+      }) : [],
+    }];
+  });
+}
 
 export function rankLimit(value) {
   const number = Number(value);
@@ -76,7 +122,10 @@ export function validateIntent(intent, today) {
   if (intent?.kind === "clarify" && typeof intent.question === "string" && intent.question.trim() && [...intent.question].length <= 100) {
     return { kind: "clarify", question: intent.question.trim() };
   }
-  if (intent?.kind === "result-dates") return { kind: "result-dates" };
+  if (intent?.kind === "result-dates") return { kind: "result-dates", resultId: resultIdPattern.test(intent.resultId) ? intent.resultId : undefined };
+  if (intent?.kind === "result-follow-up" && resultIdPattern.test(intent.resultId) && dataBlocks.includes(intent.view)) {
+    return { kind: "result-follow-up", resultId: intent.resultId, view: intent.view };
+  }
   if (intent?.kind === "message" && text) {
     return { kind: "message", text };
   }
