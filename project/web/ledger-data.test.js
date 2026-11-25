@@ -5,6 +5,7 @@ import { packLedger, unpackLedger } from "./ledger-backup.js";
 import { applyEntry, rollupAchievements, summarizeRollups } from "./ledger-rollups.js";
 import { cleanClues, entryTokens, matchScore, queryTokens } from "./ledger-search.js";
 import { EXPENSE, SCHEMA_VERSION, initialCategories } from "./model.js";
+import { isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
 
 const first = {
   id: "one", categoryId: "expense-0", type: EXPENSE, businessDate: "2019-02-01", amountMinor: 8800,
@@ -13,6 +14,16 @@ const first = {
   createdAt: "2019-02-01T00:00:00.000Z", updatedAt: "2019-02-01T00:00:00.000Z",
 };
 const second = { ...first, id: "two", businessDate: "2023-03-01", note: "北京烤鸭", clues: [], sourceText: "" };
+
+test("金额排行支持未指定日期，区分前十笔、前十个月和对结果追问年份", () => {
+  assert.equal(requestedRank("餐饮的前10项"), 10);
+  assert.equal(requestedRank("列出前十笔餐饮"), 10);
+  assert.equal(requestedRank("前10个月的餐饮"), 0);
+  assert.equal(isResultDateFollowUp("你没有给年份啊，我哪知道哪一年的"), true);
+  assert.equal(isResultDateFollowUp("刚才没写年份，改看2025年"), false);
+  const intent = validateIntent({ kind: "stats", metric: "expense", category: "餐饮", order: "amount-desc", limit: 10 }, "2026-11-25");
+  assert.deepEqual([intent.start, intent.end, intent.view, intent.limit], ["1900-01-01", "2026-11-25", "entries", 10]);
+});
 
 test("短词、原话及任意自定义线索可检索，菜名不等同于消费城市", () => {
   const filters = cleanClues([{ type: "城市", value: "北京" }, { type: "场合", value: "生日" }]);

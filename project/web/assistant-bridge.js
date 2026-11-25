@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { cleanClues, cleanTerms } from "./ledger-search.js";
+import { rankLimit } from "./assistant-model.js";
 
 const port = Number(process.env.LEDGER_WEB_PORT || 4173);
 const assets = {
@@ -60,10 +61,10 @@ async function proxy(req, res) {
     let length = 0;
     for await (const chunk of req) {
       length += chunk.length;
-      if (length > 12000) break;
+      if (length > 20000) break;
       chunks.push(chunk);
     }
-    if (length > 12000) return reply(res, 413, { error: "请求太长" });
+    if (length > 20000) return reply(res, 413, { error: "请求太长" });
     input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (!input || !["test", "interpret", "analyze"].includes(input.action) ||
       typeof input.base !== "string" || typeof input.model !== "string" || !input.model.trim() ||
@@ -84,14 +85,25 @@ async function proxy(req, res) {
   const shortText = (value, limit) => typeof value === "string" ? value.slice(0, limit) : undefined;
   const date = value => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
   const previous = input.lastQuery;
+  const result = input.lastResult;
+  const turns = Array.isArray(input.recentTurns) ? input.recentTurns.slice(-6).flatMap(item =>
+    ["user", "assistant"].includes(item?.role) && typeof item.text === "string"
+      ? [{ role: item.role, text: shortText(item.text, 180) }] : []) : [];
   const pending = input.pending;
   const analysis = input.action === "analyze";
   let task = test ? { today: "2026-01-02", text: "今天午餐花了28元" } : {
     today: date(input.today),
     text: input.text,
     previousInput: shortText(input.previousInput, 300) || undefined,
+    recentTurns: turns.length ? turns : undefined,
+    lastResult: result && date(result.start) && date(result.end) ? {
+      question: shortText(result.question, 300), start: date(result.start), end: date(result.end),
+      category: shortText(result.category, 24), view: "entries",
+      ...(result.order === "amount-desc" ? { order: result.order, limit: rankLimit(result.limit) || 10 } : {}),
+    } : undefined,
     lastQuery: previous && { start: date(previous.start), end: date(previous.end),
       metric: shortText(previous.metric, 8), category: shortText(previous.category, 24), view: shortText(previous.view, 12) || undefined,
+      ...(previous.order === "amount-desc" ? { order: previous.order, limit: rankLimit(previous.limit) || 10 } : {}),
       ...(previous.terms?.length ? { terms: cleanTerms(previous.terms) } : {}),
       ...(previous.filters?.length ? { filters: cleanClues(previous.filters) } : {}) },
     pending: pending && { original: shortText(pending.original, 600), latest: shortText(pending.latest, 600), question: shortText(pending.question, 200) },

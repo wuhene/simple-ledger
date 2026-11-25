@@ -2,6 +2,27 @@ import { EXPENSE, INCOME, isValidDate, parseMoney } from "./model.js";
 import { cleanClues, cleanTerms } from "./ledger-search.js";
 
 const dataBlocks = ["totals", "categories", "entries", "comparison"];
+const numerals = "一二三四五六七八九";
+
+export function rankLimit(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? Math.min(number, 50) : 0;
+}
+
+export function requestedRank(text) {
+  const value = text.normalize("NFKC").match(/(?:前|top\s*)(\d{1,3}|[一二三四五六七八九]?十[一二三四五六七八九]?|[一二三四五六七八九])(?=\s*(?:[笔条项名]|个(?!\s*(?:月|星|礼拜|年|小?时))|[。！？?！]|$))/i)?.[1];
+  if (!value) return 0;
+  if (/^\d/.test(value)) return rankLimit(value);
+  if (!value.includes("十")) return numerals.indexOf(value) + 1;
+  const [tens, units] = value.split("十");
+  return rankLimit((tens ? numerals.indexOf(tens) + 1 : 1) * 10 + (units ? numerals.indexOf(units) + 1 : 0));
+}
+
+export function isResultDateFollowUp(text) {
+  const missingYear = /(?:没(?:有)?(?:给|标|写|显示|说明|注明|带|说)|缺少|漏了).{0,14}(?:年份|哪一年|哪一年的|年分|日期|年月)/;
+  const asksRows = /(?:刚才|上面|这些|那几笔|排行|明细|结果).{0,28}(?:哪一年|分别.{0,4}哪年|每笔.{0,8}(?:时间|日期|年份))/;
+  return !/(?:只看|限定|改看|只查|重新查)/.test(text) && (missingYear.test(text) || asksRows.test(text));
+}
 
 function answerBlocks(values, allowed) {
   if (!Array.isArray(values)) return [];
@@ -32,7 +53,8 @@ export function validateIntent(intent, today) {
   }
   if (["search", "stats", "insight"].includes(intent?.kind)) {
     const terms = cleanTerms(intent.terms), filters = cleanClues(intent.filters);
-    const hasQuery = Boolean(terms.length || filters.length);
+    const limit = intent.order === "amount-desc" ? rankLimit(intent.limit) || 10 : 0;
+    const hasQuery = Boolean(terms.length || filters.length || limit);
     if (intent.kind === "search" && !hasQuery) throw new Error("请提供想查找的店名、菜品、地点或备注关键词。");
     const start = intent.start ?? (hasQuery ? "1900-01-01" : undefined);
     const end = intent.end ?? (hasQuery ? today : undefined);
@@ -47,12 +69,14 @@ export function validateIntent(intent, today) {
       ? { start: compareStart, end: compareEnd } : null;
     return { kind: intent.kind, start, end: end > today ? today : end,
       metric: intent.kind === "insight" ? "expense" : intent.kind === "search" ? "overview" : metric,
-      category, comparison, text, terms, filters, order: intent.order === "latest" ? "latest" : "",
-      view: intent.kind === "search" ? "entries" : dataBlocks.includes(view) ? view : "" };
+      category, comparison, text, terms, filters, limit,
+      order: limit ? "amount-desc" : intent.order === "latest" ? "latest" : "",
+      view: intent.kind === "search" || limit ? "entries" : dataBlocks.includes(view) ? view : "" };
   }
   if (intent?.kind === "clarify" && typeof intent.question === "string" && intent.question.trim() && [...intent.question].length <= 100) {
     return { kind: "clarify", question: intent.question.trim() };
   }
+  if (intent?.kind === "result-dates") return { kind: "result-dates" };
   if (intent?.kind === "message" && text) {
     return { kind: "message", text };
   }

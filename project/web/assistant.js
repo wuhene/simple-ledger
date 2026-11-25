@@ -1,6 +1,6 @@
 import { EXPENSE, INCOME, categoryTotals, dayCount, localToday, money, shiftDate, sortEntries, totals } from "./model.js";
 import { clearLedger, loadAssistantHistory, putEntry, putMeta, queryEntries, removeEntry, saveAssistantSession } from "./storage.js";
-import { validateIntent } from "./assistant-model.js";
+import { isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
 import { cleanClues } from "./ledger-search.js";
 
 const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>';
@@ -149,12 +149,17 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     const names = new Map(categories.map(item => [item.id, item.name]));
     const ranking = query.category ? [] : categoryTotals(rows, categories, type).slice(0, 8)
       .map(item => ({ name: item.category.name, amountMinor: item.amountMinor, percent: item.percent }));
+    const ordered = query.order === "amount-desc"
+      ? rows.sort((a, b) => b.amountMinor - a.amountMinor || b.businessDate.localeCompare(a.businessDate) ||
+        b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+      : query.kind === "search" && query.order !== "latest" ? rows : sortEntries(rows);
     const facts = { start: query.start, end: query.end, days, count: rows.length, category: query.category,
       metric: query.metric, view: query.view, incomeMinor: income, expenseMinor: expense,
+      ...(query.order === "amount-desc" ? { order: query.order, limit: query.limit } : {}),
       largestMinor: rows.reduce((largest, item) => Math.max(largest, item.amountMinor), 0), baseline,
       top: ranking.slice(0, 5).map(item => ({ amountMinor: item.amountMinor, percent: Math.round(item.percent * 10) / 10 })) };
     return {
-      facts, entries: (query.kind === "search" && query.order !== "latest" ? rows : sortEntries(rows)).slice(0, 20).map(item => ({
+      query, facts, entries: ordered.slice(0, facts.limit || 20).map(item => ({
         id: item.id, date: item.businessDate, note: item.note, amountMinor: item.amountMinor,
         ...(query.kind === "search" && item.clues?.length ? { clues: item.clues.slice(0, 4).map(clue => clue.value).join(" · ") } : {}),
         category: names.get(item.categoryId) || "未知分类", type: item.type,
@@ -170,6 +175,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     let text;
     if (hidden) text = "账本金额已隐藏，可以查看这次查询的日期和记录。";
     else if (!facts.count) text = "这段时间没有找到" + (facts.category ? "「" + facts.category + "」的" : "符合条件的") + "记录。";
+    else if (facts.order === "amount-desc") text = "按金额从高到低列出" + (facts.category || "相关") + "流水前 " + snapshot.entries.length + " 笔。";
     else if (query.kind === "search") text = "找到 " + facts.count + " 笔相关流水，点击记录可查看详情。";
     else if (facts.metric === "overview" && !facts.category) {
       text = "这段时间记了 " + displayMoney(facts.incomeMinor) + " 收入、" + displayMoney(facts.expenseMinor) + " 支出。";
@@ -243,14 +249,20 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       if (!snapshot || seen.has(block.type)) return "";
       seen.add(block.type);
       if (block.type === "entries" && facts.count) {
+        const ranked = facts.order === "amount-desc";
+        const showYear = ranked || item.forceYear || facts.start.slice(0, 4) !== facts.end.slice(0, 4);
         const entryRows = entries => entries.map((entry, index) =>
-          (facts.start !== facts.end && (index === 0 || entry.date !== entries[index - 1].date) ? '<div class="ai-entry-day">' +
-            E(shortDate(entry.date, entry.date.slice(0, 4) !== localToday().slice(0, 4))) + '</div>' : "") +
+          (ranked || ((showYear || facts.start !== facts.end) && (index === 0 || entry.date !== entries[index - 1].date))
+            ? '<div class="ai-entry-day">' + E((ranked ? "第 " + (index + 1) + " 名 · " : "") +
+              shortDate(entry.date, showYear || entry.date.slice(0, 4) !== localToday().slice(0, 4))) + '</div>' : "") +
           (entry.id ? '<button class="ai-entry-link" data-action="detail" data-id="' + E(entry.id) + '">' +
             row(entry.note || entry.category, (entry.type === INCOME ? "+" : "−") + displayMoney(entry.amountMinor)) + '</button>' :
             row(entry.note || entry.category, (entry.type === INCOME ? "+" : "−") + displayMoney(entry.amountMinor))) +
           (entry.clues ? paragraph(E, entry.clues) : "")).join("");
         const entries = snapshot.entries;
+        if (ranked) return panel((facts.category || "相关") + "金额排行", period + entryRows(entries) +
+          (facts.count > entries.length ? paragraph(E, "共匹配 " + facts.count.toLocaleString("zh-CN") + " 笔，显示金额最高的 " + entries.length + " 笔。") : ""),
+          entries.length + " 笔");
         const more = entries.length > 5 ? '<details><summary>展开其余 ' + (entries.length - 5) + ' 笔</summary>' +
           entryRows(entries.slice(5)) + '</details>' : "";
         return panel((facts.category || "相关") + "明细", period + entryRows(entries.slice(0, 5)) + more +
@@ -346,22 +358,59 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         (busy || !configured() ? " disabled" : "") + '>发送</button>') + '</form></div>';
   }
 
+  function previousEntryResult() {
+    const index = chat.findLastIndex(item => item.snapshot?.entries?.length && item.blocks?.some(block => block.type === "entries"));
+    if (index < 0) return null;
+    const result = chat[index];
+    const question = result.question || chat.slice(0, index).findLast(item => item.kind === "text" && item.user)?.text || "";
+    return { ...result, question };
+  }
+
+  function recentConversation() {
+    return chat.slice(0, -1).slice(-12).flatMap(item => {
+      if (item.kind === "text") return [{ role: item.user ? "user" : "assistant", text: item.text.slice(0, 180) }];
+      if (item.kind === "answer" && !item.snapshot) {
+        const text = item.blocks.filter(block => block.type === "paragraph").map(block => block.text).join(" ").slice(0, 180);
+        if (text) return [{ role: "assistant", text }];
+      }
+      return [];
+    }).slice(-6);
+  }
+
+  async function resultWithDates(previous) {
+    const original = previous.snapshot, facts = original.facts;
+    const limit = facts.limit || requestedRank(previous.question);
+    const query = original.query || { kind: "stats", start: facts.start, end: facts.end, category: facts.category, metric: facts.metric };
+    const snapshot = limit && facts.order !== "amount-desc"
+      ? await analysisSnapshot({ ...query, view: "entries", order: "amount-desc", limit })
+      : original;
+    return { kind: "answer", forceYear: true, question: previous.question, snapshot, blocks: [
+      { type: "paragraph", text: "你问的是刚才那张结果里每笔的年份。我沿用原来的查询范围，把完整日期补上。" },
+      { type: "entries" },
+    ] };
+  }
+
   async function callModel(settings, action, text = "", signal, facts) {
     const today = action === "test" ? "2026-01-02" : localToday();
+    const result = action === "interpret" ? previousEntryResult() : null;
+    const resultFacts = result?.snapshot.facts;
     let response;
     try {
       response = await fetch("./ai/api", { method: "POST", signal, headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, base: settings.base, model: settings.model, key: settings.key,
-          ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending, previousInput } :
+          ...(action === "interpret" ? { text, today, lastQuery: context?.lastQuery, pending: context?.pending, previousInput,
+            recentTurns: recentConversation(), lastResult: resultFacts && { question: result.question,
+              start: resultFacts.start, end: resultFacts.end, category: resultFacts.category,
+              order: resultFacts.order, limit: resultFacts.limit, view: "entries" } } :
             action === "analyze" ? { text, facts } : {}) }) });
     } catch {
       throw new Error("无法连接本机调试服务，请运行 npm start。");
     }
     const data = await response.json().catch(() => null);
     if (!response.ok || !data) throw new Error(data?.error || "无法连接本机调试服务，请运行 npm start。");
-    const result = validateIntent(data.intent, today);
-    if (action === "analyze" && !["answer", "message"].includes(result.kind)) throw new Error("模型未返回分析");
-    return result;
+    const intent = validateIntent(data.intent, today);
+    if (action === "analyze" && !["answer", "message"].includes(intent.kind)) throw new Error("模型未返回分析");
+    return intent;
   }
 
   async function submitConfig(form, action) {
@@ -417,9 +466,18 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     persistSession();
     refresh();
     try {
-      const intent = await callModel(settings, "interpret", text, currentRequest.signal);
+      const previousResult = previousEntryResult();
+      const intent = previousResult && isResultDateFollowUp(text) ? { kind: "result-dates" } :
+        await callModel(settings, "interpret", text, currentRequest.signal);
       if (request !== currentRequest) return;
       previousInput = text.slice(0, 300);
+      if (intent.kind === "result-dates" && previousResult) {
+        const answer = await resultWithDates(previousResult);
+        if (request !== currentRequest) return;
+        context = { lastQuery: answer.snapshot.query || context?.lastQuery };
+        chat.push(answer);
+        return;
+      }
       if (intent.kind === "record") {
         const category = available().find(item => item.name === intent.category && item.type === intent.type);
         const previous = context?.pending?.original;
@@ -431,11 +489,13 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         context = { lastQuery: context?.lastQuery };
         say(intent.text || (category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。"));
       } else if (["search", "stats", "insight"].includes(intent.kind)) {
+        const limit = requestedRank(text) || intent.limit;
+        if (limit) Object.assign(intent, { order: "amount-desc", limit, view: "entries" });
         const snapshot = await analysisSnapshot(intent);
         if (request !== currentRequest) return;
         const hidden = getData().preferences.hideAmountsByDefault;
         let blocks = fallbackAnswer(intent, snapshot, hidden);
-        if (config === settings && !hidden && intent.kind !== "search") {
+        if (config === settings && !hidden && intent.kind !== "search" && !limit) {
           progress = "正在分析账本";
           refresh();
           try {
@@ -447,9 +507,9 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
           }
           if (request !== currentRequest) return;
         }
-        chat.push({ kind: "answer", blocks, snapshot });
+        chat.push({ kind: "answer", blocks, snapshot, question: text });
         context = { lastQuery: { start: intent.start, end: intent.end, metric: intent.metric, category: intent.category, view: intent.view,
-          terms: intent.terms, filters: intent.filters } };
+          terms: intent.terms, filters: intent.filters, order: intent.order, limit: intent.limit } };
       } else if (intent.kind === "clarify") {
         const pending = { original: context?.pending?.original || text, latest: text, question: intent.question };
         context = { lastQuery: context?.lastQuery, pending };
@@ -457,7 +517,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       } else {
         context = { lastQuery: context?.lastQuery };
         if (intent.kind === "answer") chat.push({ kind: "answer", blocks: intent.blocks });
-        else say(intent.text);
+        else say(intent.text || "这段会话还没有可补充日期的流水结果。");
       }
     } catch (error) {
       if (request === currentRequest) {
