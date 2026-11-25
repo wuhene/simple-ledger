@@ -1,7 +1,6 @@
 import {
   EXPENSE,
   INCOME,
-  achievements,
   categoryTotals,
   currentMonth,
   dailyPeak,
@@ -23,11 +22,13 @@ import {
   sortEntries,
   totals,
   trend,
-  validateLedger,
 } from "./model.js";
 import {
   loadLedger,
+  categoryInUse,
   putEntry,
+  queryEntries,
+  readEntry,
   removeEntry,
   putCategory,
   putCategories,
@@ -35,10 +36,11 @@ import {
   putBudget,
   removeBudget,
   putMeta,
-  replaceLedger,
 } from "./storage.js";
 import { createAssistant } from "./assistant.js";
 import { categoryIconFills, categoryIconPaths } from "./category-icons.js";
+import { cleanTerms } from "./ledger-search.js";
+import { rollupAchievements, summarizeRollups } from "./ledger-rollups.js";
 
 const $ = (s) => document.querySelector(s),
   phone = $("#phone");
@@ -106,8 +108,11 @@ const state = {
   billYear: Number(localToday().slice(0, 4)),
   reportMonth: currentMonth(),
   reportYear: Number(localToday().slice(0, 4)),
-  detailId: null,
+  detailEntry: null,
   detailOrigin: "home",
+  searchText: "",
+  searchRows: [],
+  searchLimit: 40,
   filter: null,
   entry: null,
   entryOrigin: "home",
@@ -177,6 +182,8 @@ const uiPaths = {
   chevronRight: '<path d="m9 5 7 7-7 7"/>',
   chevronDown: '<path d="m5 9 7 7 7-7"/>',
   close: '<path d="M5 5 19 19M19 5 5 19"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+  location: '<path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/><circle cx="12" cy="12" r="7"/>',
 };
@@ -235,14 +242,27 @@ function home() {
     <div class="ledger-summary"><div class="ledger-balance"><span>本月结余</span><strong>${formatYen(t.balance)}</strong></div>
     <div><span>收入</span><strong class="income">${formatYen(t.income)}</strong></div>
     <div><span>支出</span><strong class="expense">${formatYen(t.expense)}</strong></div></div></section>
-    <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="ledger-count">${saved}<span class="micro">${rows.length} 笔</span></span></div>
-    ${rows.length ? entryRows(rows) : empty(state.data.entries.length ? "这个月暂无记录" : "还没有记录", "从第一笔收入或支出开始。", "new-entry", "记第一笔")}</section>`;
+    <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="ledger-count">${saved}<span class="micro">${rows.length} 笔</span><button class="ledger-search-button" data-action="open-search" aria-label="搜索全部流水">${uiIcon("search")}</button></span></div>
+    ${rows.length ? entryRows(rows) : empty(state.data.entryCount ? "这个月暂无记录" : "还没有记录", "从第一笔收入或支出开始。", "new-entry", "记第一笔")}</section>`;
+}
+function searchPage() {
+  const rows = state.searchRows;
+  return `<form id="ledgerSearch" class="ledger-search-form"><input class="field" name="query" type="search" aria-label="流水关键词" maxlength="120" placeholder="备注、店名、菜品等" value="${E(state.searchText)}" required><button class="primary" type="submit">搜索</button></form>` +
+    (state.searchText ? `<p class="micro" role="status">找到 ${rows.length} 笔</p>${entryRows(rows.slice(0, state.searchLimit))}
+      ${rows.length > state.searchLimit ? '<button class="outline" data-action="search-more">加载更多</button>' : ""}`
+      : '<p class="micro">搜索所有年份。多个关键词用空格隔开。</p>');
 }
 function detail() {
-  const e = state.data.entries.find((x) => x.id === state.detailId);
+  const e = state.detailEntry;
   if (!e)
     return empty("记录已不存在", "返回明细重新查看。", "go-home", "返回明细");
-  return `<div class="card" style="text-align:center"><div class="eyebrow">${typeName(e.type)}</div><div class="hero-value ${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${formatYen(e.amountMinor)}</div><span class="chip">${E(cName(e.categoryId))}</span></div><div class="card"><div class="metric"><span>分类</span><strong>${E(cName(e.categoryId))}</strong></div><div class="metric"><span>日期</span><strong>${E(e.businessDate)}</strong></div><div class="metric"><span>备注</span><strong style="white-space:pre-wrap;overflow-wrap:anywhere">${E(e.note || "无")}</strong></div><div class="metric"><span>创建</span><strong>${E(new Date(e.createdAt).toLocaleString("zh-CN"))}</strong></div></div><button class="primary" data-action="edit-entry">编辑记录</button><button class="outline danger" data-action="ask-delete-entry">删除记录</button>`;
+  const location = e.location ? metricText("定位", `${e.location.latitude.toFixed(5)}, ${e.location.longitude.toFixed(5)} · 约 ${Math.round(e.location.accuracy)} 米`) : "";
+  const source = e.sourceText ? metricText("记账原话", e.sourceText) : "";
+  const clues = e.clues?.length ? metricText("检索线索", e.clues.map(clue => `${clue.type}：${clue.value}`).join("\n")) : "";
+  return `<div class="card" style="text-align:center"><div class="eyebrow">${typeName(e.type)}</div><div class="hero-value ${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${formatYen(e.amountMinor)}</div><span class="chip">${E(cName(e.categoryId))}</span></div><div class="card"><div class="metric"><span>分类</span><strong>${E(cName(e.categoryId))}</strong></div><div class="metric"><span>日期</span><strong>${E(e.businessDate)}</strong></div>${metricText("备注", e.note || "无")}${location}${source}${clues}<div class="metric"><span>创建</span><strong>${E(new Date(e.createdAt).toLocaleString("zh-CN"))}</strong></div></div><button class="primary" data-action="edit-entry">编辑记录</button><button class="outline danger" data-action="ask-delete-entry">删除记录</button>`;
+}
+function metricText(label, value) {
+  return `<div class="metric"><span>${label}</span><strong class="detail-text">${E(value)}</strong></div>`;
 }
 function entryPage() {
   const d = state.entry;
@@ -260,6 +280,8 @@ function entryDock(d) {
   return `<section class="entry-dock ${state.entryDockEntering ? "entry-dock-enter" : ""}" aria-label="记账输入">
     <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div></div>
     <textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
+    <div class="entry-location"><button class="plain" data-action="entry-location" ${d.locationPending ? "disabled" : ""}>${uiIcon("location")}${d.location ? "移除定位" : d.locationPending ? "正在定位…" : "添加定位（可选）"}</button>
+    <span class="micro" role="status">${E(d.locationStatus || (d.location ? "已添加，仅存本机账本" : ""))}</span></div>
     <div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></section>`;
 }
 function categoryRanks(entries, type, click = true) {
@@ -342,14 +364,15 @@ function toolsPage() {
   return `<button class="menu" data-action="bills"><span class="ico">▤</span><span><strong>账单</strong><small class="micro" style="display:block">${yearMonth(state.month)} · 结余 ${formatYen(t.balance)}</small></span><span class="chev">›</span></button><button class="menu" data-action="budget"><span class="ico">◌</span><span><strong>月总预算</strong><small class="micro" style="display:block">${budgetInfo(state.month).budget ? "查看已用与剩余" : "设置本月预算"}</small></span><span class="chev">›</span></button><button class="menu" data-action="assets"><span class="ico">◇</span><span><strong>资产概览</strong><small class="micro" style="display:block">${a ? `净资产 ${formatYen(a.assetMinor - a.liabilityMinor)}` : "填写资产与负债"}</small></span><span class="chev">›</span></button>`;
 }
 function bills() {
-  const entries = state.data.entries,
-    years = [...new Set(entries.map((e) => yearOf(e.businessDate)))].sort(
+  const summaries = state.data.monthlyStats,
+    byMonth = new Map(summaries.map(summary => [summary.month, summary])),
+    years = [...new Set(summaries.map(summary => yearOf(summary.month)))].sort(
       (a, b) => b - a,
     ),
     isMonth = state.billMode === "month",
     selected = state.billYear,
-    yearRows = entries.filter((e) => yearOf(e.businessDate) === selected),
-    t = totals(isMonth ? yearRows : entries),
+    yearRows = summaries.filter(summary => yearOf(summary.month) === selected),
+    t = summarizeRollups(isMonth ? yearRows : summaries),
     months = Array.from(
       { length: 12 },
       (_, i) => `${selected}-${String(12 - i).padStart(2, "0")}`,
@@ -357,7 +380,7 @@ function bills() {
       (m) =>
         state.showAllMonths ||
         (m <= currentMonth() &&
-          (entriesForMonth(entries, m).length ||
+          (byMonth.has(m) ||
             state.data.budgets.some((b) => b.yearMonth === m))),
     );
   return `${seg(
@@ -372,11 +395,11 @@ function bills() {
     : years
   )
     .map((key) => {
-      const data = isMonth
-          ? entriesForMonth(entries, key)
-          : entries.filter((e) => yearOf(e.businessDate) === key),
-        v = totals(data);
-      return `<tr data-action="open-report" data-value="${key}"><td>${isMonth ? `${monthOf(key)}月${key === currentMonth() ? " · 至今" : ""}` : `${key}年`}</td><td>${format(v.income)}</td><td>${format(v.expense)}</td><td>${format(v.balance)}</td></tr>`;
+      const v = isMonth
+        ? byMonth.get(key) || { income: 0, expense: 0 }
+        : summarizeRollups(summaries.filter(summary => yearOf(summary.month) === key));
+      const balance = v.income - v.expense;
+      return `<tr data-action="open-report" data-value="${key}"><td>${isMonth ? `${monthOf(key)}月${key === currentMonth() ? " · 至今" : ""}` : `${key}年`}</td><td>${format(v.income)}</td><td>${format(v.expense)}</td><td>${format(balance)}</td></tr>`;
     })
     .join(
       "",
@@ -392,7 +415,7 @@ function assetsPage() {
   return `<div class="card hero"><div class="eyebrow">净资产</div><div class="hero-value">${a ? formatYen(a.assetMinor - a.liabilityMinor) : "尚未设置"}</div><div class="summary-grid"><div><span class="eyebrow">资产</span><strong>${a ? formatYen(a.assetMinor) : "—"}</strong></div><div><span class="eyebrow">负债</span><strong>${a ? formatYen(a.liabilityMinor) : "—"}</strong></div></div></div><div class="tip">资产为手动维护，收支记录不会自动改变资产。</div><div class="asset-inputs"><div><label for="assetAmount">资产总额</label><input id="assetAmount" class="field" inputmode="decimal" value="${a ? money(a.assetMinor).replaceAll(",", "") : ""}" placeholder="0.00"></div><div><label for="liabilityAmount">负债总额</label><input id="liabilityAmount" class="field" inputmode="decimal" value="${a ? money(a.liabilityMinor).replaceAll(",", "") : ""}" placeholder="0.00"></div></div><p id="assetError" class="error"></p><button class="primary" data-action="save-assets">保存资产概览</button>${a ? `<p class="micro">更新于 ${E(new Date(a.updatedAt).toLocaleString("zh-CN"))}</p>` : ""}`;
 }
 function mine() {
-  const a = achievements(state.data.entries);
+  const a = rollupAchievements(state.data.monthlyStats);
   return `<div class="card"><div class="row"><span class="ico" style="height:52px;width:52px;font-size:1.533rem">账</span><div style="flex:1"><strong>认真记录每一天</strong><div class="micro">简账 · 本地账本</div></div></div></div><div class="card achievement"><div><strong>${a.streak}</strong><span>连续记账</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div></div><div class="list"><button class="menu" data-action="categories"><span class="ico">◇</span><span>分类管理</span><span class="chev">›</span></button><button class="menu" data-action="settings"><span class="ico">⚙</span><span>设置与数据</span><span class="chev">›</span></button><button class="menu" data-action="help"><span class="ico">?</span><span>使用说明</span><span class="chev">›</span></button><button class="menu" data-action="about"><span class="ico">♡</span><span>关于简账</span><span class="chev">›</span></button></div>`;
 }
 function categoryManage() {
@@ -417,7 +440,7 @@ function settings() {
     <span class="theme-swatch" aria-hidden="true"><span></span><span></span></span><span>${label}</span>
   </label>`).join("");
   return `<fieldset class="theme-picker"><legend>外观主题</legend><div class="theme-options">${themeOptions}</div><p id="themeStatus" class="error" role="status"></p></fieldset>` +
-    aiSettings + `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。请定期导出备份；更换地址或浏览器不会自动同步。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
+    aiSettings + `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出分月 ZIP 备份</span><span class="chev">›</span></button><button class="menu" data-action="export-json"><span>导出兼容 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。备份包含账本里的备注、检索线索和已添加的定位，请保管好文件。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
 }
 
 const palette = [
@@ -449,9 +472,7 @@ function comparison(month, type) {
     const m = shiftMonth(month, i - 5);
     return {
       key: m,
-      value: totals(entriesForMonth(state.data.entries, m))[
-        type === INCOME ? "income" : "expense"
-      ],
+      value: state.data.monthlyStats.find(summary => summary.month === m)?.[type === INCOME ? "income" : "expense"] || 0,
     };
   });
 }
@@ -557,7 +578,7 @@ function report() {
     annual
       ? ""
       : `<h2 class="heading">最近6个月收入对比</h2><div class="card">${bars(comparison(state.reportMonth, INCOME))}</div><h2 class="heading">当前记账成就</h2><div class="card achievement">${(() => {
-          const a = achievements(state.data.entries);
+          const a = rollupAchievements(state.data.monthlyStats);
           return `<div><strong>${a.streak}</strong><span>连续天数</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div>`;
         })()}</div>`
   }<button class="primary" data-action="share">预览并下载报告图片</button>`;
@@ -582,6 +603,7 @@ function header() {
       mine: "我的",
       entry: state.entry?.id ? "编辑记录" : "记一笔",
       detail: "记录详情",
+      search: "搜索流水",
       categoryDetail: cName(state.filter?.categoryId),
       bills: "账单",
       report: `${yearMonth(state.reportMonth)}账单`,
@@ -645,13 +667,13 @@ function modalHtml() {
       body = dateModal(m);
       break;
     case "category":
-      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" ${isDiningCategory(cById(m.id)) ? "readonly" : ""} value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${legacyIcons[k][1]}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !isDiningCategory(cById(m.id)) && !cById(m.id)?.isBuiltin && !state.data.entries.some((e) => e.categoryId === m.id) ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
+      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" ${isDiningCategory(cById(m.id)) ? "readonly" : ""} value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${legacyIcons[k][1]}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !isDiningCategory(cById(m.id)) && !cById(m.id)?.isBuiltin && !m.inUse ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
       break;
     case "restore":
-      body = `<h2>恢复备份</h2><p>这会替换当前全部数据。请先导出当前账本备份，并确认文件已经保留在电脑上。</p><button class="outline" data-action="export">导出当前备份</button><label><input type="checkbox" id="backupConfirmed"> 我已确认备份文件已保留</label><label for="restoreFile">选择 JSON 备份</label><input id="restoreFile" class="field" type="file" accept=".json,application/json"><p id="restoreError" class="error"></p><button class="primary" data-action="preview-restore">校验并预览</button><button class="plain" data-action="close-modal">取消</button>`;
+      body = `<h2>恢复备份</h2><p>这会替换当前账本。请先导出当前账本备份，并确认文件已经保留在电脑上。</p><button class="outline" data-action="export">导出当前备份</button><label><input type="checkbox" id="backupConfirmed"> 我已确认备份文件已保留</label><label for="restoreFile">选择 ZIP 或 JSON 备份</label><input id="restoreFile" class="field" type="file" accept=".zip,.json,application/zip,application/json"><p id="restoreError" class="error" role="status">${E(m.status || "")}</p><button class="primary" data-action="preview-restore" ${m.busy ? "disabled" : ""}>校验并预览</button><button class="plain" data-action="close-modal">取消</button>`;
       break;
     case "restorePreview":
-      body = `<h2>恢复预览</h2><p>记录 ${m.data.entries.length} 笔 · 分类 ${m.data.categories.length} 个 · 预算 ${m.data.budgets.length} 个月</p><p>日期范围：${m.data.entries.length ? `${[...m.data.entries].sort((a, b) => a.businessDate.localeCompare(b.businessDate))[0].businessDate} — ${[...m.data.entries].sort((a, b) => b.businessDate.localeCompare(a.businessDate))[0].businessDate}` : "无记录"}</p><p class="danger">确认后将替换当前全部数据。</p><button class="primary" data-action="confirm-restore">确认替换</button><button class="outline" data-action="close-modal">取消</button>`;
+      body = `<h2>恢复预览</h2><p>记录 ${m.data.entries.length} 笔 · 分类 ${m.data.categories.length} 个 · 预算 ${m.data.budgets.length} 个月</p><p>日期范围：${m.range}</p><p class="danger">确认后将替换当前账本。</p><button class="primary" data-action="confirm-restore" ${m.busy ? "disabled" : ""}>${m.busy ? "正在恢复…" : "确认替换"}</button><button class="outline" data-action="close-modal" ${m.busy ? "disabled" : ""}>取消</button>`;
       break;
     case "share":
       body = `<h2>报告图片预览</h2><label><input id="shareAmounts" type="checkbox" ${state.shareOptions.amounts ? "checked" : ""}> 图片包含金额</label><label><input id="shareRanking" type="checkbox" ${state.shareOptions.ranking ? "checked" : ""}> 包含单笔排行</label><label><input id="shareAchievements" type="checkbox" ${state.shareOptions.achievements ? "checked" : ""}> 包含记账成就</label><p class="micro">默认只含汇总图表，不含备注、资产或姓名。请确认图片中的金额后再下载。</p><button class="outline" data-action="refresh-share">更新预览</button><img class="share-preview" alt="报告图片预览" src="${state.shareUrl || ""}"><button class="primary" data-action="download-share">下载 PNG 图片</button><button class="plain" data-action="close-modal">关闭</button>`;
@@ -671,6 +693,8 @@ function modalHtml() {
 function render(followChat = true) {
   if (!state.data) return;
   const oldContent = $(".content"), samePage = phone.dataset.page === state.page;
+  const restoreControls = state.modal?.kind === "restore" && !state.modal.entering
+    ? [$("#backupConfirmed"), $("#restoreFile")] : [];
   const oldScroll = oldContent?.scrollTop || 0;
   const oldEntryScroll = $(".entry-fields")?.scrollTop || 0;
   const oldThread = $(".assistant-thread");
@@ -684,6 +708,7 @@ function render(followChat = true) {
   const pages = {
     home,
     detail,
+    search: searchPage,
     entry: entryPage,
     stats,
     categoryDetail,
@@ -711,6 +736,9 @@ function render(followChat = true) {
       : "") +
     `</div>`;
   phone.dataset.page = state.page;
+  for (const control of restoreControls) {
+    if (control) document.getElementById(control.id)?.replaceWith(control);
+  }
   $(".content").scrollTop = samePage ? oldScroll : state.scrollByPage[state.page] || 0;
   if (state.page === "entry") $(".entry-fields").scrollTop = samePage ? oldEntryScroll : 0;
   const thread = $(".assistant-thread");
@@ -738,7 +766,43 @@ function render(followChat = true) {
     same?.focus({ preventScroll: true });
   }
 }
-function navigate(page, motion = null) {
+let ledgerScope, navigationSequence = 0, searchSequence = 0;
+function scopeFor(page) {
+  if (["home", "tools", "budget"].includes(page)) return periodBounds("month", `${state.month}-01`);
+  if (page === "stats") return periodBounds(state.statsPeriod, state.statsAnchor);
+  if (page === "categoryDetail") return state.filter.bounds;
+  if (page === "report") {
+    return { start: `${shiftMonth(state.reportMonth, -1)}-01`, end: periodBounds("month", `${state.reportMonth}-01`).end };
+  }
+  if (page === "annual") return periodBounds("year", `${state.reportYear}-01-01`);
+  if (["mine", "bills", "categories", "settings", "assets", "assistant", "assistantSettings", "assistantHistory", "search"].includes(page)) {
+    return { summaryOnly: true };
+  }
+  return ledgerScope;
+}
+function scopeKey(scope) {
+  return scope?.start ? `${scope.start}/${scope.end}` : scope?.summaryOnly ? "summary" : "all";
+}
+async function navigate(page, motion = null) {
+  const sequence = ++navigationSequence;
+  const scope = scopeFor(page);
+  let data = state.data, rows = state.searchRows;
+  try {
+    if (scopeKey(scope) !== scopeKey(ledgerScope)) {
+      data = scope?.summaryOnly ? { ...data, entries: [] } : await loadLedger(scope);
+    }
+    if (page === "search" && state.searchText) {
+      const terms = cleanTerms(state.searchText.split(/\s+/));
+      rows = terms.length ? await queryEntries({ terms }) : [];
+    }
+  } catch (error) {
+    if (sequence === navigationSequence) toast(`读取账本失败：${error.message}`);
+    return;
+  }
+  if (sequence !== navigationSequence) return;
+  state.data = data;
+  ledgerScope = scope;
+  state.searchRows = rows;
   if ($(".content")) state.scrollByPage[state.page] = $(".content").scrollTop;
   const mainFrom = ["home", "stats", "tools", "mine"].includes(state.page);
   const mainTo = ["home", "stats", "tools", "mine"].includes(page);
@@ -785,7 +849,7 @@ function toast(msg) {
   toastTimer = setTimeout(
     () => {
       state.toast = null;
-      render();
+      $(".toast")?.remove();
     },
     state.undo ? 5000 : 3200,
   );
@@ -810,14 +874,31 @@ function modal(m) {
   render();
 }
 function closeModal() {
+  if (state.modal?.kind === "restorePreview" && state.modal.busy) return;
   const action = state.modal?.returnFocus;
   state.modal = null;
   render();
   if (action) $(`[data-action="${action}"]`)?.focus({ preventScroll: true });
 }
 async function reload() {
-  state.data = await loadLedger();
+  const sequence = navigationSequence, scope = scopeFor(state.page);
+  const data = await loadLedger(scope);
+  if (sequence !== navigationSequence) return;
+  state.data = data;
+  ledgerScope = scope;
+  if (state.page === "search" && state.searchText) await searchLedger(state.searchText);
   render();
+}
+async function searchLedger(value) {
+  const text = value.trim();
+  const terms = cleanTerms(text.split(/\s+/));
+  const sequence = navigationSequence;
+  const request = ++searchSequence;
+  const rows = terms.length ? await queryEntries({ terms }) : [];
+  if (state.page !== "search" || sequence !== navigationSequence || request !== searchSequence) return;
+  state.searchText = text;
+  state.searchRows = rows;
+  state.searchLimit = 40;
 }
 function beginEntry(e = null, nativeTransition = false) {
   state.entry = {
@@ -827,6 +908,7 @@ function beginEntry(e = null, nativeTransition = false) {
     expr: e ? money(e.amountMinor).replaceAll(",", "") : "",
     date: e?.businessDate || localToday(),
     note: e?.note || "",
+    location: e?.location || null,
     error: "",
   };
   state.entryOrigin = state.page;
@@ -835,21 +917,53 @@ function beginEntry(e = null, nativeTransition = false) {
 function draftChanged() {
   const d = state.entry;
   if (d.id) {
-    const e = state.data.entries.find((x) => x.id === d.id);
+    const e = state.detailEntry;
     return (
       !!e &&
       (d.type !== e.type ||
         d.categoryId !== e.categoryId ||
         d.expr !== money(e.amountMinor).replaceAll(",", "") ||
         d.date !== e.businessDate ||
-        d.note !== e.note)
+        d.note !== e.note ||
+        d.location !== (e.location || null))
     );
   }
   return !!(
     d.expr ||
     d.note ||
-    d.date !== localToday()
+    d.date !== localToday() ||
+    d.location
   );
+}
+function changeEntryLocation() {
+  const draft = state.entry;
+  if (draft.location) {
+    draft.location = null;
+    draft.locationStatus = "";
+    render();
+    return;
+  }
+  if (draft.date !== localToday() || !navigator.geolocation) {
+    draft.locationStatus = draft.date !== localToday() ? "补记时请把实际消费地点写进备注。" : "当前浏览器不支持定位。";
+    render();
+    return;
+  }
+  draft.locationPending = true;
+  draft.locationStatus = "";
+  render();
+  const finish = (location, status) => {
+    if (state.page !== "entry" || state.entry !== draft) return;
+    draft.locationPending = false;
+    if (state.saveBusy) return;
+    draft.location = draft.date === localToday() ? location : null;
+    draft.locationStatus = draft.date === localToday() ? status : "补记时请把实际消费地点写进备注。";
+    render();
+  };
+  navigator.geolocation.getCurrentPosition(({ coords, timestamp }) => finish({
+    latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy,
+    capturedAt: new Date(timestamp).toISOString(),
+  }, ""), error => finish(null, error.code === 1 ? "没有定位权限，可以直接保存。" : "暂时无法定位，可以直接保存。"),
+  { maximumAge: 0, timeout: 8000 });
 }
 function back() {
   if (state.modal) {
@@ -872,6 +986,7 @@ function back() {
   }
   const targets = {
     detail: state.detailOrigin,
+    search: "home",
     categoryDetail: state.filter?.origin || "stats",
     bills: "tools",
     report: "bills",
@@ -921,7 +1036,7 @@ async function saveEntry() {
       !c ||
       c.type !== d.type ||
       (c.hidden &&
-        c.id !== state.data.entries.find((e) => e.id === d.id)?.categoryId)
+        c.id !== state.detailEntry?.categoryId)
     )
       throw new Error("请选择有效分类");
     if ([...d.note].length > 200) throw new Error("备注最多200字");
@@ -933,10 +1048,11 @@ async function saveEntry() {
   state.saveBusy = true;
   render();
   try {
-    const old = d.id ? state.data.entries.find((e) => e.id === d.id) : null,
+    const old = d.id ? state.detailEntry : null,
       now = new Date().toISOString();
     const entry = {
-      id: old?.id || uid(),
+      ...old,
+      id: old?.id || (d.saveId ||= uid()),
       type: d.type,
       amountMinor,
       categoryId: d.categoryId,
@@ -944,12 +1060,15 @@ async function saveEntry() {
       note: d.note,
       createdAt: old?.createdAt || now,
       updatedAt: now,
+      location: d.location,
     };
     await putEntry(entry);
-    state.data = await loadLedger();
-    state.detailId = entry.id;
+    state.detailEntry = entry;
     const destination = old ? "detail" : state.entryOrigin;
     if (destination === "home") state.month = entry.businessDate.slice(0, 7);
+    const scope = scopeFor(destination);
+    state.data = await loadLedger(scope);
+    ledgerScope = scope;
     entryCover("entry-closing", () => {
       showEntrySaved(entry.id, destination);
       navigate(destination, "");
@@ -963,12 +1082,12 @@ async function saveEntry() {
   state.saveBusy = false;
 }
 async function deleteEntry() {
-  const e = state.data.entries.find((x) => x.id === state.detailId);
+  const e = state.detailEntry;
   if (!e) return;
   await removeEntry(e.id);
   state.undo = e;
   await reload();
-  navigate("home");
+  await navigate("home");
   toast("记录已删除");
   setTimeout(() => {
     if (state.undo?.id === e.id) {
@@ -1063,7 +1182,7 @@ async function toggleCategory(id) {
   }
   await putCategory({ ...c, hidden: !c.hidden });
   if (!c.hidden && state.entry?.categoryId === id &&
-    state.data.entries.find(entry => entry.id === state.entry.id)?.categoryId !== id) {
+    state.detailEntry?.categoryId !== id) {
     state.entry.categoryId = null;
   }
   await reload();
@@ -1081,12 +1200,37 @@ async function reorderCategory(sourceId, targetId) {
   await putCategories(rows.map((category, sortIndex) => ({ ...category, sortIndex })));
   await reload();
 }
-function exportBackup() {
-  const data = JSON.stringify(state.data, null, 2),
-    url = URL.createObjectURL(new Blob([data], { type: "application/json" })),
+function backupWorker(action, payload) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./ledger-backup.js", import.meta.url), { type: "module" });
+    worker.onmessage = ({ data }) => {
+      worker.terminate();
+      if (data.error) reject(new Error(data.error));
+      else resolve(data.result);
+    };
+    worker.onerror = () => {
+      worker.terminate();
+      reject(new Error("无法处理备份文件"));
+    };
+    worker.postMessage({ action, payload });
+  });
+}
+let exportingBackup = false;
+async function exportBackup(legacy = false) {
+  if (exportingBackup) return;
+  exportingBackup = true;
+  try {
+    const data = await backupWorker(legacy ? "json" : "pack");
+    downloadBackup(data, legacy);
+  } finally {
+    exportingBackup = false;
+  }
+}
+function downloadBackup(data, legacy) {
+  const url = URL.createObjectURL(new Blob([data], { type: legacy ? "application/json" : "application/zip" })),
     link = document.createElement("a");
   link.href = url;
-  link.download = `简账备份-${localToday()}.json`;
+  link.download = `简账备份-${localToday()}.${legacy ? "json" : "zip"}`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -1094,21 +1238,36 @@ function exportBackup() {
   toast("已触发备份下载，请确认文件已保留");
 }
 async function previewRestore() {
+  const dialog = state.modal;
+  if (dialog.busy) return;
   if (!$("#backupConfirmed").checked) {
     $("#restoreError").textContent = "请先确认已保留当前账本备份";
     return;
   }
   const file = $("#restoreFile").files[0];
   if (!file) {
-    $("#restoreError").textContent = "请选择 JSON 文件";
+    $("#restoreError").textContent = "请选择 ZIP 或 JSON 备份文件";
     return;
   }
+  dialog.busy = true;
+  dialog.status = "正在校验备份…";
+  render();
   try {
-    if (file.size > 100 * 1024 * 1024) throw new Error("备份文件过大");
-    const data = validateLedger(JSON.parse(await file.text()));
-    modal({ kind: "restorePreview", data });
+    if (file.size > 180 * 1024 * 1024) throw new Error("备份文件过大");
+    const data = await backupWorker("unpack", file);
+    if (state.modal === dialog) {
+      let start = "9999-12-31", end = "";
+      for (const entry of data.entries) {
+        if (entry.businessDate < start) start = entry.businessDate;
+        if (entry.businessDate > end) end = entry.businessDate;
+      }
+      modal({ kind: "restorePreview", data, range: end ? `${start} — ${end}` : "无记录" });
+    }
   } catch (err) {
-    $("#restoreError").textContent = `校验失败：${err.message}`;
+    dialog.status = `校验失败：${err.message}`;
+  } finally {
+    dialog.busy = false;
+    if (state.modal === dialog) render();
   }
 }
 function drawShare() {
@@ -1185,7 +1344,7 @@ function drawShare() {
     }
   }
   if (state.shareOptions.achievements) {
-    const a = achievements(state.data.entries);
+    const a = rollupAchievements(state.data.monthlyStats);
     ctx.fillStyle = "#172d26";
     ctx.font = "bold 25px system-ui";
     ctx.fillText(
@@ -1229,16 +1388,33 @@ async function handleAction(el) {
       case "new-entry":
         openEntryCover();
         break;
-      case "detail":
-        state.detailId = id;
-        state.detailOrigin = state.page;
-        navigate("detail");
+      case "open-search":
+        await navigate("search");
+        $("#ledgerSearch input")?.focus({ preventScroll: true });
         break;
+      case "search-more":
+        state.searchLimit += 40;
+        render();
+        break;
+      case "detail": {
+        const origin = state.page;
+        const entry = await readEntry(id);
+        if (state.page !== origin) break;
+        if (!entry) {
+          toast("记录已不存在");
+          break;
+        }
+        state.detailEntry = entry;
+        state.detailOrigin = origin;
+        await navigate("detail");
+        break;
+      }
       case "edit-entry":
-        beginEntry(state.data.entries.find((x) => x.id === state.detailId));
+        if (state.detailEntry) beginEntry(state.detailEntry);
         break;
       case "ask-delete-entry": {
-        const e = state.data.entries.find((x) => x.id === state.detailId);
+        const e = state.detailEntry;
+        if (!e) break;
         modal({
           kind: "confirm",
           title: "删除这笔记录？",
@@ -1284,6 +1460,9 @@ async function handleAction(el) {
         break;
       case "save-entry":
         await saveEntry();
+        break;
+      case "entry-location":
+        changeEntryLocation();
         break;
       case "pick-date":
         modal({ kind: "pickDate", pending: state.entry.date, month: state.entry.date.slice(0, 7), mode: "calendar", input: state.entry.date, error: "" });
@@ -1348,6 +1527,10 @@ async function handleAction(el) {
           m.pending = m.input;
         }
         if (!isValidDate(m.pending)) break;
+        if (state.entry.date !== m.pending && state.entry.location) {
+          state.entry.location = null;
+          state.entry.locationStatus = "日期已修改，定位已清除。";
+        }
         state.entry.date = m.pending;
         closeModal();
         break;
@@ -1355,7 +1538,7 @@ async function handleAction(el) {
       case "set-month":
         if (canShiftMonth(state.month, delta)) {
           state.month = shiftMonth(state.month, delta);
-          render();
+          await reload();
         }
         break;
       case "pick-month":
@@ -1383,7 +1566,8 @@ async function handleAction(el) {
           break;
         }
         state.month = value;
-        closeModal();
+        state.modal = null;
+        await reload();
         break;
       }
       case "stats-type":
@@ -1401,7 +1585,7 @@ async function handleAction(el) {
         else
           state.statsAnchor = `${Number(state.statsAnchor.slice(0, 4)) + delta}-01-01`;
         state.trendPoint = null;
-        render();
+        await reload();
         break;
       }
       case "trend-point":
@@ -1488,7 +1672,8 @@ async function handleAction(el) {
         break;
       case "edit-category": {
         const c = cById(id);
-        modal({ kind: "category", id, name: c.name, iconKey: c.iconKey });
+        const inUse = c.isBuiltin || await categoryInUse(id);
+        if (state.page === "categories") modal({ kind: "category", id, name: c.name, iconKey: c.iconKey, inUse });
         break;
       }
       case "save-category":
@@ -1521,7 +1706,10 @@ async function handleAction(el) {
         break;
       }
       case "export":
-        exportBackup();
+        await exportBackup();
+        break;
+      case "export-json":
+        await exportBackup(true);
         break;
       case "restore":
         modal({ kind: "restore" });
@@ -1530,11 +1718,19 @@ async function handleAction(el) {
         await previewRestore();
         break;
       case "confirm-restore": {
-        const data = state.modal.data;
-        await replaceLedger(data);
+        const preview = state.modal;
+        if (preview.busy) break;
+        preview.busy = true;
+        render();
+        try {
+          await backupWorker("restore", preview.data);
+        } catch (error) {
+          preview.busy = false;
+          throw error;
+        }
         state.modal = null;
         await reload();
-        navigate("home");
+        await navigate("home");
         toast("备份已恢复");
         break;
       }
@@ -1552,7 +1748,7 @@ async function handleAction(el) {
         await assistant.clearLocalData();
         state.modal = null;
         await reload();
-        navigate("home");
+        await navigate("home");
         toast("账本已清空");
         break;
       case "share":
@@ -1610,6 +1806,10 @@ async function handleAction(el) {
   }
 }
 
+phone.addEventListener("pointerdown", (event) => {
+  // Keep the dock from moving under the pointer when the note field loses focus.
+  if (document.activeElement?.id === "entryNote" && event.target.closest('[data-action="entry-location"]')) event.preventDefault();
+});
 phone.addEventListener("click", (e) => {
   const aiControl = e.target.closest("[data-assistant]");
   if (aiControl && phone.contains(aiControl)) {
@@ -1642,12 +1842,24 @@ phone.addEventListener("click", (e) => {
   }
   if (pageControl && phone.contains(pageControl)) handleAction(pageControl);
 });
-phone.addEventListener("submit", assistant.submit);
+phone.addEventListener("submit", async (event) => {
+  if (event.target.id !== "ledgerSearch") {
+    assistant.submit(event);
+    return;
+  }
+  event.preventDefault();
+  try {
+    await searchLedger(new FormData(event.target).get("query"));
+    if (state.page === "search") render();
+  } catch (error) {
+    if (state.page === "search") toast(`搜索失败：${error.message}`);
+  }
+});
 phone.addEventListener("keydown", assistant.onKeyDown);
 phone.addEventListener("scroll", (event) => {
   if (event.target.classList?.contains("assistant-thread")) updateChatJump(event.target);
 }, true);
-phone.addEventListener("change", (event) => {
+phone.addEventListener("change", async (event) => {
   if (event.target.name === "app-theme") {
     const value = event.target.value;
     if (!themes.some(([id]) => id === value)) return;
@@ -1664,7 +1876,11 @@ phone.addEventListener("change", (event) => {
   if (event.target.id !== "statsPeriod") return;
   state.statsPeriod = event.target.value;
   state.trendPoint = null;
-  render();
+  try {
+    await reload();
+  } catch (error) {
+    toast(`读取统计失败：${error.message}`);
+  }
   $("#statsPeriod")?.focus({ preventScroll: true });
 });
 phone.addEventListener("input", (e) => {
@@ -1710,7 +1926,8 @@ $("#width390").addEventListener("click", () => {
   $("#width360").classList.remove("selected");
 });
 try {
-  state.data = await loadLedger();
+  ledgerScope = scopeFor("home");
+  state.data = await loadLedger(ledgerScope);
   await assistant.initHistory();
   render();
 } catch (err) {

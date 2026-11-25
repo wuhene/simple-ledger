@@ -1,3 +1,5 @@
+import { cleanClues, validLocation } from "./ledger-search.js";
+
 export const SCHEMA_VERSION = 1;
 export const MAX_MINOR = 9999999999;
 export const EXPENSE = "EXPENSE";
@@ -287,7 +289,7 @@ export function validateLedger(data, today = localToday()) {
     throw new Error("备份记录数量超出限制");
   const ids = new Set(),
     names = new Set(),
-    categoryIds = new Set();
+    categoryIds = new Map();
   for (const c of data.categories) {
     if (
       !c ||
@@ -307,13 +309,13 @@ export function validateLedger(data, today = localToday()) {
     const key = `${c.type}:${c.name}`;
     if (names.has(key)) throw new Error("备份中存在重复分类名称");
     names.add(key);
-    categoryIds.add(c.id);
+    categoryIds.set(c.id, c);
   }
   for (const type of [EXPENSE, INCOME])
     if (!data.categories.some((c) => c.type === type && !c.hidden))
       throw new Error("每种收支至少需要一个可用分类");
   for (const e of data.entries) {
-    const c = data.categories.find((x) => x.id === e?.categoryId);
+    const c = categoryIds.get(e?.categoryId);
     if (
       !e ||
       typeof e.id !== "string" ||
@@ -328,6 +330,9 @@ export function validateLedger(data, today = localToday()) {
       c.type !== e.type ||
       typeof e.note !== "string" ||
       [...e.note].length > 200 ||
+      (e.sourceText !== undefined && (typeof e.sourceText !== "string" || e.sourceText.length > 1200)) ||
+      (e.clues !== undefined && (!Array.isArray(e.clues) || cleanClues(e.clues).length !== e.clues.length)) ||
+      (e.location !== undefined && e.location !== null && !validLocation(e.location)) ||
       !Number.isFinite(Date.parse(e.createdAt)) ||
       !Number.isFinite(Date.parse(e.updatedAt))
     )

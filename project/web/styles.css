@@ -1215,6 +1215,27 @@ body::-webkit-scrollbar,
 .ledger-heading { margin: 18px 0 10px; }
 .ledger-heading .heading { font-size: 1.03rem; margin: 3px 0; }
 .ledger-count { display: flex; align-items: baseline; gap: 10px; }
+.ledger-count:has(.ledger-search-button) { align-items: center; }
+.ledger-search-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--brand);
+}
+.ledger-search-button:is(:hover, :focus-visible) { background: var(--soft); }
+.ledger-search-button svg, .entry-location svg { width: 18px; height: 18px; flex: none; }
+.ledger-search-form { display: flex; align-items: center; gap: 8px; }
+.ledger-search-form .field { flex: 1; min-width: 0; margin: 0; }
+.ledger-search-form .primary { width: auto; min-width: 64px; margin: 0; }
+.detail-text { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.entry-location { display: flex; gap: 8px; align-items: center; }
+.entry-location button { display: flex; align-items: center; gap: 5px; min-height: 36px; font-size: .83rem; }
+.ai-entry-link { width: 100%; padding: 0; border: 0; border-radius: 4px; background: none; color: inherit; text-align: left; }
+.ai-entry-link:is(:hover, :focus-visible) { background: var(--soft); }
 .ledger-rows .group-head {
   margin: 0;
   padding: 8px;

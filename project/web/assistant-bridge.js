@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { cleanClues, cleanTerms } from "./ledger-search.js";
 
 const port = Number(process.env.LEDGER_WEB_PORT || 4173);
 const assets = {
@@ -12,6 +13,10 @@ const assets = {
   "/assistant.js": ["assistant.js", "text/javascript"],
   "/assistant-model.js": ["assistant-model.js", "text/javascript"],
   "/category-icons.js": ["category-icons.js", "text/javascript"],
+  "/ledger-search.js": ["ledger-search.js", "text/javascript"],
+  "/ledger-rollups.js": ["ledger-rollups.js", "text/javascript"],
+  "/ledger-backup.js": ["ledger-backup.js", "text/javascript"],
+  "/vendor/fflate.js": ["vendor/fflate.js", "text/javascript"],
 };
 const systemPrompt = (await readFile(new URL("./assistant-prompt.txt", import.meta.url), "utf8")).trim();
 
@@ -86,7 +91,9 @@ async function proxy(req, res) {
     text: input.text,
     previousInput: shortText(input.previousInput, 300) || undefined,
     lastQuery: previous && { start: date(previous.start), end: date(previous.end),
-      metric: shortText(previous.metric, 8), category: shortText(previous.category, 24), view: shortText(previous.view, 12) || undefined },
+      metric: shortText(previous.metric, 8), category: shortText(previous.category, 24), view: shortText(previous.view, 12) || undefined,
+      ...(previous.terms?.length ? { terms: cleanTerms(previous.terms) } : {}),
+      ...(previous.filters?.length ? { filters: cleanClues(previous.filters) } : {}) },
     pending: pending && { original: shortText(pending.original, 600), latest: shortText(pending.latest, 600), question: shortText(pending.question, 200) },
   };
   if (analysis) {

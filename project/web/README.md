@@ -16,14 +16,15 @@ npm start
 npm test
 ```
 
-建议用测试数据验收，再从“我的 → 设置与数据”导出 JSON 备份。浏览器内的测试记录不会自动进入 Android App。
+可从「我的 → 设置与数据」导出分月 ZIP 或兼容 JSON 备份。浏览器内的测试记录不会自动进入 Android App，当前 Android 只识别 JSON 内的账务字段。
 
 ## 代码
 
 - `index.html`、`styles.css`：固定手机画布与界面。
 - `app.js`：14 个页面、交互与报告图片。
 - `model.js`：整数分金额、日期、统计及备份校验。
-- `storage.js`：IndexedDB 读写及全量恢复事务。
+- `storage.js`、`ledger-search.js`、`ledger-rollups.js`：IndexedDB 读写、日期索引、全文检索和本地月汇总。
+- `ledger-backup.js`：浏览器 Worker 内处理分月 ZIP、兼容 JSON 和分片校验。ZIP 使用随项目分发的 [fflate 0.8.3](licenses/fflate.txt)。
 - `assistant.js`、`assistant-model.js`：AI 聊天、记账草稿、本地统计和识别结果校验。
 - `assistant-bridge.js`：本机 Web 服务及模型请求中转。
 
