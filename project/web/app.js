@@ -889,6 +889,100 @@ async function reload() {
   if (state.page === "search" && state.searchText) await searchLedger(state.searchText);
   render();
 }
+let monthRequest = 0, monthGestureBusy = false;
+async function showLedgerMonth(month, anchor = "top") {
+  const request = ++monthRequest, navigation = navigationSequence, openModal = state.modal;
+  const scope = periodBounds("month", `${month}-01`);
+  const data = await loadLedger(scope);
+  if (request !== monthRequest || navigation !== navigationSequence || state.modal !== openModal) return;
+  ledgerScope = scope;
+  state.data = data;
+  state.month = month;
+  state.modal = null;
+  if (anchor === "bottom" && !state.toast) toast(yearMonth(month));
+  else render();
+  const content = $(".content");
+  content.scrollTop = anchor === "bottom" ? content.scrollHeight : 0;
+  if (openModal?.kind === "pickMonth") $('[data-action="pick-month"]')?.focus({ preventScroll: true });
+}
+
+function homeScrollTarget(target) {
+  if (state.page !== "home" || state.modal) return null;
+  const content = $(".content");
+  return content?.contains(target) ? content : null;
+}
+
+function monthEdge(content, delta) {
+  const bottom = content.scrollHeight - content.clientHeight;
+  if (delta > 0 && content.scrollTop >= bottom - 2) return -1;
+  if (delta < 0 && content.scrollTop <= 2) return 1;
+  return 0;
+}
+
+async function followLedgerEdge(direction) {
+  if (!direction || monthGestureBusy || state.page !== "home" || state.modal ||
+      !canShiftMonth(state.month, direction, direction > 0 ? currentMonth() : "9999-12")) return;
+  monthGestureBusy = true;
+  try {
+    await showLedgerMonth(shiftMonth(state.month, direction), direction < 0 ? "top" : "bottom");
+  } catch (error) {
+    if (state.page === "home") toast(`无法读取相邻月份：${error.message}`);
+  } finally {
+    monthGestureBusy = false;
+  }
+}
+
+const edgeTravel = 64;
+let wheelEdge = 0, wheelTravel = 0, wheelAt = -Infinity, wheelLocked = false;
+phone.addEventListener("wheel", event => {
+  const content = homeScrollTarget(event.target);
+  if (!content || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+  const now = performance.now();
+  if (now - wheelAt > 220) {
+    wheelEdge = wheelTravel = 0;
+    wheelLocked = false;
+  }
+  wheelAt = now;
+  if (wheelLocked || monthGestureBusy) return;
+  const direction = monthEdge(content, event.deltaY);
+  const pixels = event.deltaMode === 1 ? event.deltaY * 16 :
+    event.deltaMode === 2 ? event.deltaY * content.clientHeight : event.deltaY;
+  wheelTravel = direction === wheelEdge ? wheelTravel + Math.abs(pixels) : Math.abs(pixels);
+  wheelEdge = direction;
+  if (!direction || wheelTravel < edgeTravel) return;
+  wheelLocked = true;
+  void followLedgerEdge(direction);
+}, { passive: true });
+
+let edgeTouch;
+phone.addEventListener("touchstart", event => {
+  const content = homeScrollTarget(event.target);
+  const touch = event.touches[0];
+  edgeTouch = content && event.touches.length === 1 && !monthGestureBusy
+    ? { content, x: touch.clientX, y: touch.clientY, lastY: touch.clientY, direction: 0, travel: 0 } : null;
+}, { passive: true });
+phone.addEventListener("touchmove", event => {
+  if (!edgeTouch) return;
+  const touch = event.touches[0], gesture = edgeTouch;
+  if (event.touches.length !== 1 || homeScrollTarget(event.target) !== gesture.content ||
+      Math.abs(touch.clientX - gesture.x) > Math.max(12, Math.abs(touch.clientY - gesture.y))) {
+    edgeTouch = null;
+    return;
+  }
+  const delta = gesture.lastY - touch.clientY;
+  if (!delta) return;
+  gesture.lastY = touch.clientY;
+  const direction = monthEdge(gesture.content, delta);
+  gesture.travel = direction === gesture.direction ? gesture.travel + Math.abs(delta) : Math.abs(delta);
+  gesture.direction = direction;
+}, { passive: true });
+phone.addEventListener("touchend", () => {
+  const gesture = edgeTouch;
+  edgeTouch = null;
+  if (gesture?.content === $(".content") && gesture.travel >= edgeTravel) void followLedgerEdge(gesture.direction);
+}, { passive: true });
+phone.addEventListener("touchcancel", () => { edgeTouch = null; }, { passive: true });
+
 async function searchLedger(value) {
   const text = value.trim();
   const terms = cleanTerms(text.split(/\s+/));
@@ -1537,8 +1631,7 @@ async function handleAction(el) {
       }
       case "set-month":
         if (canShiftMonth(state.month, delta)) {
-          state.month = shiftMonth(state.month, delta);
-          await reload();
+          await showLedgerMonth(shiftMonth(state.month, delta));
         }
         break;
       case "pick-month":
@@ -1565,9 +1658,7 @@ async function handleAction(el) {
           toast("请选择有效月份");
           break;
         }
-        state.month = value;
-        state.modal = null;
-        await reload();
+        await showLedgerMonth(value);
         break;
       }
       case "stats-type":
