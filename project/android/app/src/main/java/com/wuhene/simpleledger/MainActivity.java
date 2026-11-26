@@ -490,13 +490,18 @@ public final class MainActivity extends Activity {
         String last = ""; LinearLayout group = null;
         for (LedgerDb.Entry e : entries) {
             if (!e.businessDate.equals(last)) {
-                group = column(); LedgerDb.Totals day = perDay.get(e.businessDate); LinearLayout dayHeader = row();
+                group = column();
+                if (!last.isEmpty()) {
+                    rule(group, 0xffeceef0);
+                    space(group, 3);
+                }
+                LedgerDb.Totals day = perDay.get(e.businessDate); LinearLayout dayHeader = row();
                 padding(dayHeader, 7, 4);
                 dayHeader.addView(text(dayLabel(e.businessDate), 12, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
                 String summary = (day.income > 0 ? "收入 " + money(day.income) : "") + (day.income > 0 && day.expense > 0 ? " · " : "")
                         + (day.expense > 0 ? "支出 " + money(day.expense) : "");
-                dayHeader.addView(text(summary, 11, MUTED, false)); group.addView(dayHeader); rule(group, LINE);
-                LinearLayout.LayoutParams groupParams = lp(-1, -2); groupParams.setMargins(dp(16), 0, dp(16), dp(8)); body.addView(group, groupParams); last = e.businessDate;
+                dayHeader.addView(text(summary, 11, MUTED, false)); group.addView(dayHeader);
+                LinearLayout.LayoutParams groupParams = lp(-1, -2); groupParams.setMargins(dp(16), last.isEmpty() ? 0 : dp(4), dp(16), 0); body.addView(group, groupParams); last = e.businessDate;
             }
             LedgerDb.Category cat = categories.get(e.categoryId);
             LinearLayout line = row();
@@ -517,7 +522,7 @@ public final class MainActivity extends Activity {
             }
             line.addView(left, new LinearLayout.LayoutParams(0, -2, 1));
             line.addView(amountText(recordAmount(e), 14, LedgerDb.EXPENSE.equals(e.type) ? DARK : GREEN));
-            line.setOnClickListener(v -> navigate("detail", e.id)); group.addView(line); rule(group, 0xfff7f8fa);
+            line.setOnClickListener(v -> navigate("detail", e.id)); group.addView(line);
         }
     }
     /**
@@ -1033,7 +1038,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n从明细或统计右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.11。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.12。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -1730,10 +1735,10 @@ public final class MainActivity extends Activity {
      */
     private FrameLayout categoryBadge(LedgerDb.Category category, boolean colored, boolean selected) {
         FrameLayout badge = new FrameLayout(this);
-        badge.setBackground(shape(selected ? Color.TRANSPARENT : 0xfff4f4f6, 24));
+        badge.setBackground(shape(selected ? Color.TRANSPARENT : 0xfff6f6f6, 24));
         String name = LedgerIcons.graphic(category);
         if (colored) addIconLayer(badge, "cat_" + name + "_fill", themeId == 0 ? ACTION : blendAction());
-        addIconLayer(badge, "cat_" + name + "_outline", 0xff3e4049);
+        addIconLayer(badge, "cat_" + name + "_outline", 0xff222222);
         return badge;
     }
 
@@ -1752,6 +1757,7 @@ public final class MainActivity extends Activity {
         int id = getResources().getIdentifier(name, "drawable", getPackageName());
         if (id == 0) return;
         ImageView layer = new ImageView(this);
+        layer.setScaleType(ImageView.ScaleType.FIT_XY);
         layer.setImageResource(id);
         layer.setImageTintList(android.content.res.ColorStateList.valueOf(color));
         target.addView(layer, new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER));
@@ -3395,15 +3401,17 @@ public final class MainActivity extends Activity {
         private View dateRow(String date, int position, LinearLayout container) {
             if (container == null) {
                 container = column();
+                rule(container, 0xffeceef0);
                 LinearLayout header = row();
                 padding(header, 7, 4);
                 header.addView(text("", 12, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
                 header.addView(text("", 11, MUTED, false));
                 container.addView(header);
-                rule(container, LINE);
             }
-            container.setPadding(dp(16), position == 0 ? 0 : dp(6), dp(16), 0);
-            LinearLayout line = (LinearLayout) container.getChildAt(0);
+            container.setPadding(dp(16), position == 0 ? 0 : dp(4), dp(16), 0);
+            container.getChildAt(0).setVisibility(position == 0 ? View.GONE : View.VISIBLE);
+            LinearLayout line = (LinearLayout) container.getChildAt(1);
+            line.setPadding(dp(7), dp(position == 0 ? 4 : 7), dp(7), dp(4));
             ((TextView) line.getChildAt(0)).setText(dayLabel(date));
             LedgerDb.Totals day = totals.get(date);
             String income = day.income > 0 ? "收入 " + money(day.income) : "";
@@ -3433,7 +3441,6 @@ public final class MainActivity extends Activity {
                 line.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
                 line.addView(amountText("", 14, DARK));
                 container.addView(line);
-                rule(container, 0xfff7f8fa);
             }
             LinearLayout line = (LinearLayout) container.getChildAt(0);
             if (entry.id.equals(savedEntryId)) {
