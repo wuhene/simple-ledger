@@ -748,8 +748,11 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < days.size(); i++) chatValue(data, days.get(i), money(values.get(i)));
         trend.addView(data);
     }
+    /**
+     * 绘制账单趋势与账期的日均和峰值。
+     */
     private void renderTrend(LinearLayout body, List<LedgerDb.Entry> rows, String start, String end, String kind) {
-        LinearLayout c = card(); c.addView(text("收支趋势", 17, DARK, true)); space(c, 8);
+        LinearLayout c = column();
         Map<String, Long> by = new HashMap<>(), byDay = new HashMap<>(); long sum = 0;
         for (LedgerDb.Entry e : rows) { String key = kind.equals("year") ? e.businessDate.substring(0, 7) : e.businessDate; by.put(key, by.getOrDefault(key, 0L) + e.amountMinor); byDay.put(e.businessDate, byDay.getOrDefault(e.businessDate, 0L) + e.amountMinor); sum += e.amountMinor; }
         List<String> labels = new ArrayList<>(); List<Long> values = new ArrayList<>();
@@ -757,8 +760,35 @@ public final class MainActivity extends Activity {
             else { for (LocalDate cursor = LocalDate.parse(start); !cursor.toString().equals(end); cursor = cursor.plusDays(1)) { labels.add(cursor.toString()); values.add(by.getOrDefault(cursor.toString(), 0L)); } labels.add(end); values.add(by.getOrDefault(end, 0L)); } }
         if (labels.isEmpty()) c.addView(text("这一期还没有可统计的日期", 14, MUTED, false));
         else { long max = 0; for (long value : values) max = Math.max(max, value); final long peak = max; View chart = new View(this) {
-            @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); Paint paint = new Paint(3); float width = getWidth() / (float) values.size(); float usable = getHeight() - dp(24); paint.setColor(LINE); canvas.drawLine(0, usable, getWidth(), usable, paint); for (int i = 0; i < values.size(); i++) { float height = peak == 0 ? 0 : (values.get(i) / (float) peak) * (usable - dp(8)); paint.setColor(GREEN); canvas.drawRoundRect(i * width + dp(2), usable - height, (i + 1) * width - dp(2), usable, dp(4), dp(4), paint); } paint.setColor(MUTED); paint.setTextSize(dp(11)); canvas.drawText(labels.get(0).substring(5), dp(2), getHeight() - dp(4), paint); if (labels.size() > 1) canvas.drawText(labels.get(labels.size() - 1).substring(5), getWidth() - dp(42), getHeight() - dp(4), paint); }
-        }; chart.setOnTouchListener((v, event) -> { if (event.getAction() == android.view.MotionEvent.ACTION_UP) { int i = Math.min(values.size() - 1, Math.max(0, (int) (event.getX() / v.getWidth() * values.size()))); success(labels.get(i) + " · " + money(values.get(i))); return true; } return true; }); c.addView(chart, lp(-1, 125)); }
+            /**
+             * 绘制可点按查看金额的趋势柱和日期端点。
+             */
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                float slot = getWidth() / (float) values.size();
+                float barWidth = Math.min(dp(16), slot * .64f);
+                float baseline = getHeight() - dp(19);
+                paint.setColor(LINE);
+                canvas.drawLine(0, baseline, getWidth(), baseline, paint);
+                if (!hidden && peak > 0) {
+                    paint.setColor(themeId == 0 ? 0xffe8b52f : ACTION);
+                    for (int i = 0; i < values.size(); i++) {
+                        float height = (float) (values.get(i) / (double) peak) * (baseline - dp(5));
+                        float center = (i + .5f) * slot;
+                        canvas.drawRoundRect(center - barWidth / 2, baseline - height,
+                                center + barWidth / 2, baseline, dp(2), dp(2), paint);
+                    }
+                }
+                paint.setColor(MUTED);
+                paint.setTextSize(dp(11));
+                canvas.drawText(labels.get(0).substring(5), 0, getHeight() - dp(4), paint);
+                if (labels.size() > 1) {
+                    paint.setTextAlign(Paint.Align.RIGHT);
+                    canvas.drawText(labels.get(labels.size() - 1).substring(5), getWidth(), getHeight() - dp(4), paint);
+                }
+            }
+        }; chart.setOnTouchListener((v, event) -> { if (event.getAction() == android.view.MotionEvent.ACTION_UP) { int i = Math.min(values.size() - 1, Math.max(0, (int) (event.getX() / v.getWidth() * values.size()))); success(labels.get(i) + " · " + money(values.get(i))); return true; } return true; }); c.addView(chart, lp(-1, 92)); }
         long days = start.compareTo(end) > 0 ? 0 : ChronoUnit.DAYS.between(LocalDate.parse(start), LocalDate.parse(end)) + 1; long daily = days == 0 ? 0 : Math.round(sum / (double) days);
         long highest = 0; String peakDay = "—"; for (Map.Entry<String, Long> item : byDay.entrySet()) if (item.getValue() > highest || item.getValue() == highest && item.getKey().compareTo(peakDay) < 0) { highest = item.getValue(); peakDay = item.getKey(); }
         space(c, 10); c.addView(text("日均  " + money(daily) + "   ·   单日最高  " + money(highest), 13, MUTED, false)); if (highest > 0) c.addView(text("最高日  " + peakDay, 12, MUTED, false)); addCard(body, c);
@@ -864,7 +894,17 @@ public final class MainActivity extends Activity {
         String end = annual ? reportingMonth.substring(0, 4) + "-12-31" : monthEnd(reportingMonth);
         if (start.compareTo(LedgerMath.today()) > 0) { LinearLayout empty = card(); empty.addView(text("未来月份暂无报告", 15, MUTED, false)); addCard(body, empty); return; }
         LedgerDb.Totals t = db.totals(start, end);
-        totalCard(body, t, (annual ? reportingMonth.substring(0, 4) + "年" : monthLabel(reportingMonth)) + "结余");
+        LinearLayout summary = column();
+        summary.setBackground(shape(themeId == 0 ? 0xfffffae8 : SOFT, 13));
+        padding(summary, 14, 11);
+        summary.addView(text(annual ? "全年结余" : "本月结余", 12, MUTED, false));
+        summary.addView(amountText(money(t.balance()), 25, DARK));
+        space(summary, 8);
+        LinearLayout totals = row();
+        totals.addView(coloredAmount("收入", t.income, RED), new LinearLayout.LayoutParams(0, -2, 1));
+        totals.addView(coloredAmount("支出", t.expense, EXPENSE_COLOR), new LinearLayout.LayoutParams(0, -2, 1));
+        summary.addView(totals);
+        addCard(body, summary);
         List<LedgerDb.Entry> all = db.statsEntries(start, end, null);
         if (!annual) {
             String previous = LedgerMath.shiftMonth(reportingMonth, -1);
@@ -897,52 +937,84 @@ public final class MainActivity extends Activity {
         LinearLayout action = column(); padding(action, 18, 8); action.addView(button("预览并保存报告图片", true, () -> shareReport(start, end, t)), lp(-1, 50)); body.addView(action);
     }
     /**
-     * 展示收支分类组成、比例图例和明细入口。
+     * 展示横向支出占比和可进入明细的分类列表。
      */
     private void reportTypeSection(LinearLayout body, List<LedgerDb.Entry> all, String type, String title) {
-        section(body, title); Map<String, Long> sums = new HashMap<>(); long total = 0;
-        for (LedgerDb.Entry e : all) if (e.type.equals(type)) { sums.put(e.categoryId, sums.getOrDefault(e.categoryId, 0L) + e.amountMinor); total += e.amountMinor; }
-        if (sums.isEmpty()) { LinearLayout empty = card(); empty.addView(text("暂无记录", 14, MUTED, false)); addCard(body, empty); return; }
-        final long amount = total; List<Map.Entry<String, Long>> ranking = new ArrayList<>(sums.entrySet()); ranking.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+        Map<String, Long> sums = new HashMap<>();
+        long total = 0;
+        for (LedgerDb.Entry entry : all) {
+            if (!type.equals(entry.type)) continue;
+            sums.merge(entry.categoryId, entry.amountMinor, Long::sum);
+            total += entry.amountMinor;
+        }
+        List<Map.Entry<String, Long>> ranking = new ArrayList<>(sums.entrySet());
+        ranking.sort(Map.Entry.<String, Long>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()));
+        LinearLayout block = column();
+        LinearLayout heading = row();
+        heading.addView(text(title, 15, DARK, true), new LinearLayout.LayoutParams(0, -2, 1));
+        if (!ranking.isEmpty()) heading.addView(text(ranking.size() + " 个分类", 11, MUTED, false));
+        block.addView(heading);
+        space(block, 6);
+        if (ranking.isEmpty()) {
+            block.addView(text("暂无记录", 14, MUTED, false));
+            addCard(body, block);
+            return;
+        }
         Map<String, LedgerDb.Category> categories = new HashMap<>();
         for (LedgerDb.Category category : db.categories(type, true)) categories.put(category.id, category);
-        if (LedgerDb.EXPENSE.equals(type)) addCard(body, reportDonut(ranking, categories, amount));
-        LinearLayout rows = card();
+        int[] colors = {themeId == 0 ? 0xffe8b52f : ACTION, 0xff6a8871, 0xff758ba2, 0xffaa91be, 0xffdedadb};
+        boolean expense = LedgerDb.EXPENSE.equals(type);
         String reportMonth = page.id;
         boolean annual = "year".equals(billKind);
-        for (Map.Entry<String, Long> item : ranking) {
-            LedgerDb.Category category = categories.get(item.getKey());
-            if (category == null) continue;
-            LinearLayout group = column();
-            padding(group, 0, 6);
-            LinearLayout line = row();
-            line.addView(categoryBadge(category, true, false), lp(31, 31));
-            TextView label = text(category.name, 14, DARK, false);
-            label.setPadding(dp(8), 0, 0, 0);
-            line.addView(label, new LinearLayout.LayoutParams(0, dp(34), 1));
-            line.addView(text(money(item.getValue()), 14, DARK, true));
-            if (!hidden) {
-                TextView percent = text(String.format(Locale.ROOT, "%.1f%%", item.getValue() * 100d / amount), 12, MUTED, false);
-                percent.setPadding(dp(7), 0, 0, 0);
-                line.addView(percent);
-            }
-            group.addView(line);
-            if (!hidden) {
-                android.widget.ProgressBar bar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-                bar.setMax(1000);
-                bar.setProgress((int) (item.getValue() * 1000 / amount));
-                bar.setProgressTintList(android.content.res.ColorStateList.valueOf(GREEN));
-                group.addView(bar, lp(-1, 6));
-            }
-            group.setOnClickListener(view -> {
-                detailStart = annual ? reportMonth.substring(0, 4) + "-01-01" : reportMonth + "-01";
-                detailEnd = annual ? reportMonth.substring(0, 4) + "-12-31" : monthEnd(reportMonth);
-                navigate("categoryDetail", category.id);
-            });
-            if (rows.getChildCount() > 0) rule(rows, 0xffedf1ee);
-            rows.addView(group);
+        boolean grouped = expense && ranking.size() > colors.length;
+        int visible = grouped ? colors.length - 1 : ranking.size();
+        long remainder = total;
+        for (int i = 0; i < visible; i++) {
+            remainder -= ranking.get(i).getValue();
         }
-        addCard(body, rows);
+        if (expense) {
+            LinearLayout headline = row();
+            headline.addView(text(annual ? "全年支出" : "本月支出", 12, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
+            headline.addView(amountText(money(total), 17, DARK));
+            block.addView(headline);
+            if (!hidden && total > 0) {
+                List<Long> segments = new ArrayList<>();
+                for (int i = 0; i < visible; i++) segments.add(ranking.get(i).getValue());
+                if (grouped) segments.add(remainder);
+                space(block, 8);
+                block.addView(reportShareBar(segments, total, colors), lp(-1, 13));
+                space(block, 5);
+            }
+        }
+        LinearLayout additional = column();
+        additional.setVisibility(View.GONE);
+        String start = annual ? reportMonth.substring(0, 4) + "-01-01" : reportMonth + "-01";
+        String end = annual ? reportMonth.substring(0, 4) + "-12-31" : monthEnd(reportMonth);
+        for (int i = 0; i < ranking.size(); i++) {
+            Map.Entry<String, Long> item = ranking.get(i);
+            LedgerDb.Category category = categories.get(item.getKey());
+            int color = expense ? colors[Math.min(i, colors.length - 1)] : GREEN;
+            LinearLayout line = reportShareRow(category == null ? "未知分类" : category.name, item.getValue(), total, color);
+            line.setOnClickListener(view -> {
+                detailStart = start;
+                detailEnd = end;
+                navigate("categoryDetail", item.getKey());
+            });
+            (i < visible ? block : additional).addView(line);
+        }
+        if (grouped) {
+            LinearLayout more = reportShareRow("其余 " + (ranking.size() - visible) + " 个分类", remainder, total, colors[colors.length - 1]);
+            TextView arrow = (TextView) more.getChildAt(more.getChildCount() - 1);
+            more.setOnClickListener(view -> {
+                boolean expanded = additional.getVisibility() == View.VISIBLE;
+                additional.setVisibility(expanded ? View.GONE : View.VISIBLE);
+                arrow.setText(expanded ? "›" : "⌄");
+            });
+            block.addView(more);
+            block.addView(additional);
+        }
+        rule(block, LINE);
+        addCard(body, block);
     }
     private void reportCategoryChanges(LinearLayout body, List<LedgerDb.Entry> current) {
         String reportMonth = page.id;
@@ -1039,7 +1111,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n从明细或统计右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.13。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.14。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -2893,22 +2965,44 @@ public final class MainActivity extends Activity {
      * 渲染月账单内的单笔支出排行。
      */
     private void renderReportRanking(LinearLayout body, List<LedgerDb.Entry> all) {
-        section(body, "单笔支出排行");
         List<LedgerDb.Entry> top = biggestExpenses(all);
-        LinearLayout rankings = card();
+        LinearLayout rankings = column();
+        rankings.addView(text("单笔支出排行", 15, DARK, true));
+        space(rankings, 5);
         if (top.isEmpty()) rankings.addView(text("暂无支出", 14, MUTED, false));
-        int count = showAllReportEntries ? top.size() : Math.min(top.size(), 5);
+        int count = showAllReportEntries ? top.size() : Math.min(top.size(), 3);
         for (int i = 0; i < count; i++) {
             LedgerDb.Entry entry = top.get(i);
             LedgerDb.Category cat = db.findCategory(entry.categoryId);
-            LinearLayout line = column();
-            chatValue(line, (i + 1) + ". " + (cat == null ? "分类" : cat.name) + " · " + entry.businessDate, money(entry.amountMinor));
+            String category = cat == null ? "未知分类" : cat.name;
+            LinearLayout line = row();
+            line.setMinimumHeight(dp(46));
+            TextView rank = text(String.format(Locale.ROOT, "%02d", i + 1), 13, GREEN, true);
+            rank.setMinWidth(dp(34));
+            line.addView(rank);
+            LinearLayout content = column();
+            content.setPadding(dp(4), dp(4), dp(6), dp(4));
+            content.addView(recordLabel(entry.note.isEmpty() ? category : entry.note));
+            LocalDate date = LocalDate.parse(entry.businessDate);
+            content.addView(text(date.getMonthValue() + "月" + date.getDayOfMonth() + "日 · " + category, 11, MUTED, false));
+            line.addView(content, new LinearLayout.LayoutParams(0, -2, 1));
+            line.addView(amountText(money(entry.amountMinor), 14, DARK));
+            TextView arrow = text("›", 16, MUTED, false);
+            arrow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+            line.addView(arrow, lp(17, -2));
             line.setOnClickListener(view -> navigate("detail", entry.id));
             rankings.addView(line);
         }
-        if (top.size() > 5) rankings.addView(ghost(showAllReportEntries ? "收起" : "查看全部", () -> {
-            showAllReportEntries = !showAllReportEntries; render();
-        }));
+        if (top.size() > 3) {
+            TextView more = ghost(showAllReportEntries ? "收起" : "查看全部", () -> {
+                page.scroll = pageScroll.getScrollY();
+                showAllReportEntries = !showAllReportEntries;
+                render();
+            });
+            more.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            rankings.addView(more);
+        }
+        rule(rankings, LINE);
         addCard(body, rankings);
     }
 
@@ -3267,65 +3361,6 @@ public final class MainActivity extends Activity {
         sheet.addView(button("关闭", true, dialog::dismiss), lp(-1, 50));
         dialog.setContentView(sheet);
         showBottomSheet(dialog, sheet);
-    }
-
-    /**
-     * 将账单支出圆环和前五类图例并排显示。
-     */
-    private LinearLayout reportDonut(List<Map.Entry<String, Long>> ranking, Map<String, LedgerDb.Category> categories, long total) {
-        LinearLayout container = card();
-        LinearLayout content = row();
-        content.setGravity(Gravity.TOP);
-        int[] palette = {0xff246b54, 0xff5c8aa1, 0xffa9875a, 0xff8775a5, 0xff658760, 0xff899690};
-        List<Long> amounts = new ArrayList<>();
-        List<String> labels = new ArrayList<>();
-        long remaining = total;
-        for (int i = 0; i < Math.min(5, ranking.size()); i++) {
-            Map.Entry<String, Long> item = ranking.get(i);
-            LedgerDb.Category category = categories.get(item.getKey());
-            labels.add(category == null ? "未知分类" : category.name);
-            amounts.add(item.getValue());
-            remaining -= item.getValue();
-        }
-        if (remaining > 0) { labels.add("其它分类"); amounts.add(remaining); }
-        View ring = new View(this) {
-            /**
-             * 绘制与图例对应的类别比例。
-             */
-            @Override protected void onDraw(Canvas canvas) {
-                super.onDraw(canvas);
-                Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG);
-                float middle = getWidth() / 2f, radius = middle - dp(1);
-                pen.setStyle(Paint.Style.FILL);
-                float angle = -90;
-                for (int i = 0; i < amounts.size(); i++) {
-                    pen.setColor(hidden ? LINE : palette[i]);
-                    float sweep = amounts.get(i) * 360f / total;
-                    canvas.drawArc(middle - radius, middle - radius, middle + radius, middle + radius, angle, sweep, true, pen);
-                    angle += sweep;
-                }
-                pen.setColor(WHITE);
-                canvas.drawCircle(middle, middle, radius * .64f, pen);
-            }
-        };
-        ring.setContentDescription("分类支出组成");
-        content.addView(ring, lp(105, 105));
-        LinearLayout legend = column();
-        legend.setPadding(dp(10), 0, 0, 0);
-        for (int i = 0; i < labels.size(); i++) {
-            LinearLayout item = row();
-            View dot = new View(this);
-            dot.setBackground(shape(hidden ? LINE : palette[i], 8));
-            item.addView(dot, lp(8, 8));
-            String ratio = hidden ? "" : String.format(Locale.ROOT, " %.1f%%", amounts.get(i) * 100d / total);
-            TextView label = text(labels.get(i) + ratio, 12, DARK, false);
-            label.setPadding(dp(7), 0, 0, 0);
-            item.addView(label, lp(-1, 20));
-            legend.addView(item);
-        }
-        content.addView(legend, new LinearLayout.LayoutParams(0, -2, 1));
-        container.addView(content);
-        return container;
     }
 
     /**
@@ -3749,5 +3784,60 @@ public final class MainActivity extends Activity {
         if (value.endsWith(".00")) value = value.substring(0, value.length() - 3);
         else if (value.endsWith("0")) value = value.substring(0, value.length() - 1);
         return sign + value;
+    }
+
+    /**
+     * 绘制横向色带中的各分类占比。
+     */
+    private View reportShareBar(List<Long> segments, long total, int[] colors) {
+        View bar = new View(this) {
+            /**
+             * 按金额比例填充色带，并在各段之间留细缝。
+             */
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                long cumulative = 0;
+                float left = 0;
+                for (int i = 0; i < segments.size(); i++) {
+                    cumulative += segments.get(i);
+                    float right = (float) (getWidth() * (cumulative / (double) total));
+                    float gap = i + 1 == segments.size() ? 0 : Math.min(dp(2), (right - left) / 3);
+                    paint.setColor(colors[i]);
+                    canvas.drawRect(left, 0, right - gap, getHeight(), paint);
+                    left = right;
+                }
+            }
+        };
+        bar.setBackground(shape(WHITE, 4));
+        bar.setClipToOutline(true);
+        bar.setContentDescription("分类支出横向占比");
+        return bar;
+    }
+
+    /**
+     * 将分类颜色、金额和占比对齐在同一行。
+     */
+    private LinearLayout reportShareRow(String name, long amount, long total, int color) {
+        LinearLayout line = row();
+        line.setMinimumHeight(dp(44));
+        View dot = new View(this);
+        dot.setBackground(shape(hidden ? LINE : color, 8));
+        dot.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        line.addView(dot, lp(8, 8));
+        TextView label = recordLabel(name);
+        label.setPadding(dp(10), dp(3), dp(6), dp(3));
+        line.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
+        line.addView(amountText(money(amount), 14, DARK));
+        if (!hidden && total > 0) {
+            TextView percent = text(String.format(Locale.ROOT, "%.1f%%", amount * 100d / total), 12, MUTED, false);
+            percent.setMinWidth(dp(50));
+            percent.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+            line.addView(percent);
+        }
+        TextView arrow = text("›", 16, MUTED, false);
+        arrow.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        line.addView(arrow, lp(17, -2));
+        return line;
     }
 }
