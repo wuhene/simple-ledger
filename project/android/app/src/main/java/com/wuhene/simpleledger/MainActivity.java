@@ -105,6 +105,8 @@ public final class MainActivity extends Activity {
     private boolean assistantSaving;
     private static final int ASSISTANT_LOCATION = 46;
     private boolean pickingForAssistant;
+    private View statusBarBackdrop;
+    private int pageStatusBarColor = BG;
 
     private static final class Page { final String name, id; int scroll, firstRow, rowOffset; Page(String name, String id) { this.name = name; this.id = id; } }
 
@@ -115,15 +117,27 @@ public final class MainActivity extends Activity {
         super.onCreate(saved);
         db = new LedgerDb(this);
         applyPalette(getPreferences(MODE_PRIVATE).getInt("theme", 0));
+        configureWindowInsets();
+        FrameLayout windowContent = new FrameLayout(this);
         root = new FrameLayout(this); root.setBackgroundColor(BG);
+        windowContent.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        statusBarBackdrop = new View(this);
+        statusBarBackdrop.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        windowContent.addView(statusBarBackdrop, new FrameLayout.LayoutParams(-1, 0, Gravity.TOP));
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             int top, bottom; boolean keyboard;
-            if (Build.VERSION.SDK_INT >= 30) { android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars()); top = bars.top; bottom = Math.max(bars.bottom, insets.getInsets(WindowInsets.Type.ime()).bottom); keyboard = insets.isVisible(WindowInsets.Type.ime()); }
+            if (Build.VERSION.SDK_INT >= 30) { android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()); top = bars.top; bottom = Math.max(bars.bottom, insets.getInsets(WindowInsets.Type.ime()).bottom); keyboard = insets.isVisible(WindowInsets.Type.ime()); }
             else { top = insets.getSystemWindowInsetTop(); bottom = insets.getSystemWindowInsetBottom(); keyboard = bottom > dp(120); }
+            android.view.ViewGroup.LayoutParams backdropSize = statusBarBackdrop.getLayoutParams();
+            if (backdropSize.height != top) {
+                backdropSize.height = top;
+                statusBarBackdrop.setLayoutParams(backdropSize);
+            }
             if (entryKeypad != null) entryKeypad.setVisibility(keyboard ? View.GONE : View.VISIBLE);
             v.setPadding(0, top, 0, bottom); return insets;
         });
-        host = new FrameLayout(this); root.addView(host, new FrameLayout.LayoutParams(-1, -1)); setContentView(root);
+        host = new FrameLayout(this); root.addView(host, new FrameLayout.LayoutParams(-1, -1)); setContentView(windowContent);
+        setPageStatusBarColor(homeHeaderColor());
         TextView loading = text("正在打开本地账本…", 16, MUTED, false);
         loading.setGravity(Gravity.CENTER);
         host.addView(loading, new FrameLayout.LayoutParams(-1, -1));
@@ -229,6 +243,7 @@ public final class MainActivity extends Activity {
      */
     private void render() {
         if (!ready) return;
+        setPageStatusBarColor(BG);
         if (renderedPage == page) keepScroll();
         highlightedEntry = null;
         saveStatus = null;
@@ -406,7 +421,8 @@ public final class MainActivity extends Activity {
      */
     private void renderHome(LinearLayout body, int count) {
         LinearLayout hero = column();
-        hero.setBackgroundColor(themeId == 0 ? ACTION : TOP);
+        hero.setBackgroundColor(homeHeaderColor());
+        setPageStatusBarColor(homeHeaderColor());
         int headerInk = themeId == 0 ? ACTION_TEXT : TOP_TEXT;
         LinearLayout date = row();
         padding(date, 18, 8);
@@ -1024,7 +1040,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.8。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.9。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -1389,6 +1405,7 @@ public final class MainActivity extends Activity {
      */
     private void buildEntry() {
         if (entryCard == null) return;
+        updateStatusBar();
         entryCard.removeAllViews();
         noteView = null; amountView = null; dateView = null; entryKeypad = null;
         LinearLayout shell = column();
@@ -1510,6 +1527,7 @@ public final class MainActivity extends Activity {
             root.removeView(card); entryCard = null; entryKeypad = null; draft = null;
             host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
             entryCategoryScroll = null; entryDock = null; locating = false; noteView = null;
+            updateStatusBar();
             if (saved) {
                 if (saveStatus == null) success("已保存");
                 String marker = savedEntryId;
@@ -2964,9 +2982,11 @@ public final class MainActivity extends Activity {
             android.content.SharedPreferences preferences = getPreferences(MODE_PRIVATE);
             if (preferences.getBoolean("acceptanceFixtureReady", false)) return;
             if (db.entryCount() == 0) {
+                String asset = privateLedger ? "private-ledger.zip" : "acceptance-ledger.zip";
+                if (privateLedger && !Arrays.asList(getAssets().list("")).contains(asset)) return;
                 runOnUiThread(() -> loading.setText(privateLedger ? "首次启动正在载入你的历史流水\n请稍候…" :
                         "首次启动正在载入 10 万笔验收流水\n请稍候…"));
-                try (InputStream archive = getAssets().open(privateLedger ? "private-ledger.zip" : "acceptance-ledger.zip")) {
+                try (InputStream archive = getAssets().open(asset)) {
                     db.importJson(LedgerBackup.read(archive));
                 }
             }
@@ -2981,6 +3001,7 @@ public final class MainActivity extends Activity {
         LinearLayout bar = row();
         padding(bar, 18, 0);
         bar.setBackgroundColor(TOP);
+        setPageStatusBarColor(TOP);
         bar.addView(text(title, 21, TOP_TEXT, true), new LinearLayout.LayoutParams(0, dp(64), 1));
         if (isMain()) {
             View eye = eyeButton(TOP_TEXT);
@@ -3639,6 +3660,57 @@ public final class MainActivity extends Activity {
             dialog.dismiss();
             buildEntry();
             if (combined == null) success("备注已达字数限制，已保留原文。可缩短备注后重新选地点。");
+        }
+    }
+
+    /**
+     * 让页面统一绘制系统状态栏的背景区域。
+     */
+    @SuppressWarnings("deprecation")
+    private void configureWindowInsets() {
+        android.view.Window window = getWindow();
+        window.setStatusBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 29) window.setStatusBarContrastEnforced(false);
+        if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false);
+        else {
+            View decor = window.getDecorView();
+            decor.setSystemUiVisibility(decor.getSystemUiVisibility() |
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+        }
+    }
+
+    /**
+     * 返回明细页月头与状态栏共用的背景色。
+     */
+    private int homeHeaderColor() {
+        return themeId == 0 ? ACTION : TOP;
+    }
+
+    /**
+     * 保存当前页面顶部的颜色并更新系统状态栏。
+     */
+    private void setPageStatusBarColor(int color) {
+        pageStatusBarColor = color;
+        updateStatusBar();
+    }
+
+    /**
+     * 按当前可见页面设置状态栏底色和图标对比度。
+     */
+    @SuppressWarnings("deprecation")
+    private void updateStatusBar() {
+        int color = entryCard != null && entryCard.getVisibility() == View.VISIBLE ? BG : pageStatusBarColor;
+        statusBarBackdrop.setBackgroundColor(color);
+        boolean darkIcons = Color.luminance(color) > .179f;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller == null) return;
+            int light = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+            controller.setSystemBarsAppearance(darkIcons ? light : 0, light);
+        } else {
+            View decor = getWindow().getDecorView();
+            int flags = decor.getSystemUiVisibility(), light = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            decor.setSystemUiVisibility(darkIcons ? flags | light : flags & ~light);
         }
     }
 }
