@@ -282,7 +282,7 @@ export function validateLedger(data, today = localToday()) {
   )
     throw new Error("备份版本或结构无效");
   if (
-    data.entries.length > 100000 ||
+    data.entries.length > 120000 ||
     data.categories.length > 1000 ||
     data.budgets.length > 2000
   )

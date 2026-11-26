@@ -56,7 +56,7 @@ export async function unpackLedger(buffer) {
   if (!files["manifest.json"] || !files["ledger.json"]) throw new Error("缺少简账备份清单或账本资料");
   const manifest = JSON.parse(decoder.decode(files["manifest.json"]));
   if (manifest?.format !== format || manifest.version !== 1 || !Array.isArray(manifest.shards) ||
-    !Number.isInteger(manifest.count) || manifest.count < 0 || manifest.count > 100000 ||
+    !Number.isInteger(manifest.count) || manifest.count < 0 || manifest.count > 120000 ||
     manifest.shards.length !== seen.size - 2 ||
     manifest.ledgerSha256 !== await digest(files["ledger.json"])) throw new Error("备份版本或校验值无效");
   const entries = [];

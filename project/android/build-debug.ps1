@@ -32,8 +32,8 @@ Run (Join-Path $JdkPath 'bin\javac.exe') (@('-encoding','UTF-8','-source','17','
 Run (Join-Path $tools 'aapt2.exe') @('compile','--dir',(Join-Path $projectRoot 'app\src\main\res'),'-o',(Join-Path $build 'resources.zip'))
 $sourceManifest = Get-Content -Raw (Join-Path $projectRoot 'app\src\main\AndroidManifest.xml')
 $generatedManifest = Join-Path $build 'AndroidManifest.xml'
-$sourceManifest.Replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.wuhene.simpleledger" android:versionCode="1" android:versionName="0.1.0">') | Set-Content -Encoding utf8 $generatedManifest
-Run (Join-Path $tools 'aapt2.exe') @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35',(Join-Path $build 'resources.zip'))
+$sourceManifest.Replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.wuhene.simpleledger" android:versionCode="4" android:versionName="0.2.0">') | Set-Content -Encoding utf8 $generatedManifest
+Run (Join-Path $tools 'aapt2.exe') @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35','-A',(Join-Path $projectRoot 'app\src\main\assets'),(Join-Path $build 'resources.zip'))
 Run (Join-Path $JdkPath 'bin\jar.exe') @('cf',(Join-Path $build 'classes.jar'),'-C',$classes,'.')
 Run (Join-Path $tools 'd8.bat') @('--min-api','26','--lib',$androidJar,'--output',$dex,(Join-Path $build 'classes.jar'))
 Run (Join-Path $JdkPath 'bin\jar.exe') @('uf',(Join-Path $build 'unsigned.apk'),'-C',$dex,'classes.dex')
