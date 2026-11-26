@@ -769,4 +769,18 @@ public final class LedgerDb extends SQLiteOpenHelper {
             throw new IllegalStateException("聊天记录损坏", error);
         }
     }
+
+    /**
+     * 读取 AI 自动记账偏好。
+     */
+    boolean assistantAutoBooking() {
+        return Boolean.parseBoolean(meta("assistantAutoBooking", "false"));
+    }
+
+    /**
+     * 保存 AI 自动记账偏好。
+     */
+    void setAssistantAutoBooking(boolean enabled) {
+        putMeta(getWritableDatabase(), "assistantAutoBooking", String.valueOf(enabled));
+    }
 }

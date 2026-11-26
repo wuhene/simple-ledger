@@ -160,15 +160,16 @@ export async function queryEntries({ start = "1900-01-01", end = "9999-12-31", t
       b.entry.businessDate.localeCompare(a.entry.businessDate) ||
       b.entry.createdAt.localeCompare(a.entry.createdAt) || a.entry.id.localeCompare(b.entry.id)).map(row => row.entry);
 }
-export async function putEntry(entry) {
-  await writeEntry(entry.id, indexedEntry(entry));
+export async function putEntry(entry, assistantSession) {
+  await writeEntry(entry.id, indexedEntry(entry), undefined, assistantSession);
 }
 export async function removeEntry(id, expectedUpdatedAt) {
   await writeEntry(id, null, expectedUpdatedAt);
 }
-async function writeEntry(id, row, expectedUpdatedAt) {
+async function writeEntry(id, row, expectedUpdatedAt, assistantSession) {
   const db = await openDatabase(),
-    tx = db.transaction(["entries", "monthlyStats"], "readwrite");
+    tx = db.transaction(assistantSession ? ["entries", "monthlyStats", "assistantSessions"] :
+      ["entries", "monthlyStats"], "readwrite");
   const completion = done(tx), entries = tx.objectStore("entries");
   const update = request(entries.get(id)).then(async entry => {
     if (entry && expectedUpdatedAt !== undefined && entry.updatedAt !== expectedUpdatedAt) {
@@ -179,6 +180,7 @@ async function writeEntry(id, row, expectedUpdatedAt) {
       await updateMonthlyStats(tx, entry, row);
       if (row) entries.put(row);
       else entries.delete(id);
+      if (assistantSession) tx.objectStore("assistantSessions").put(assistantSession);
     } catch (error) {
       try { tx.abort(); } catch { /* The failed request already ended the transaction. */ }
       throw error;

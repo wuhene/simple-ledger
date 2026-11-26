@@ -152,6 +152,7 @@ final class LedgerAssistant {
      */
     void finish(String text, int token) throws Exception {
         stage = "正在理解你的问题";
+        boolean automatic = db.assistantAutoBooking();
         JSONObject conversation;
         JSONObject previous;
         JSONObject oldPending;
@@ -180,7 +181,8 @@ final class LedgerAssistant {
                 }
                 nextDraft = object("type", type, "date", date, "amount", LedgerMath.money(minor).replace(",", ""),
                         "note", note, "sourceText", source, "categoryId", categoryId, "clues", cleanClues(intent.optJSONArray("clues")));
-                item = textItem(intent.optString("text", "识别到一笔记录，请核对后入账。"));
+                item = textItem(categoryId.isEmpty() ? "识别到一笔记录，请先选分类。" :
+                        intent.optString("text", "识别到一笔记录，请核对后入账。"));
                 put(item, "steps", new JSONArray().put("生成记账草稿 · 等待确认"));
                 break;
             }
@@ -247,6 +249,17 @@ final class LedgerAssistant {
             if (token != generation) return;
             lastQuery = nextQuery;
             pending = nextPending;
+            if (automatic && nextDraft != null && !nextDraft.optString("categoryId").isEmpty()) {
+                stage = "正在校验并保存流水";
+                try {
+                    bookDraft(nextDraft, nextDraft.getString("amount"), nextDraft.getString("date"),
+                            nextDraft.getString("categoryId"), nextDraft.getString("note"), nextDraft.optJSONArray("clues"), true);
+                    return;
+                } catch (RuntimeException | JSONException error) {
+                    item = textItem("自动记账未能保存，可以核对草稿后重试。");
+                    put(item, "steps", new JSONArray().put("生成记账草稿 · 等待确认"));
+                }
+            }
             draft = nextDraft;
             chat.put(item);
             persist();
@@ -258,26 +271,13 @@ final class LedgerAssistant {
      */
     synchronized void saveDraft(String amount, String date, String categoryId, String note, String clueText) throws Exception {
         if (draft == null) return;
-        LedgerDb.Category category = db.findCategory(categoryId);
-        if (category == null || category.hidden) throw new IllegalArgumentException("请选择可用分类");
-        LedgerDb.Entry entry = new LedgerDb.Entry();
-        entry.type = draft.getString("type");
-        entry.amountMinor = LedgerMath.parseMoney(amount, false);
-        entry.businessDate = date;
-        entry.categoryId = categoryId;
-        entry.note = note.trim();
-        entry.sourceText = draft.optString("sourceText");
         JSONArray clues = new JSONArray();
         for (String line : clueText.split("\\r?\\n")) {
             int divider = line.indexOf('：');
             if (divider < 0) divider = line.indexOf(':');
             if (divider > 0) clues.put(object("type", line.substring(0, divider), "value", line.substring(divider + 1)));
         }
-        entry.clues = cleanClues(clues);
-        db.saveEntry(entry);
-        chat.put(object("kind", "receipt", "entry", LedgerDb.entryJson(entry), "undone", false));
-        draft = null;
-        persist();
+        bookDraft(draft, amount, date, categoryId, note, clues, false);
     }
 
     /**
@@ -833,5 +833,46 @@ final class LedgerAssistant {
             if (block != null && type.equals(block.optString("type"))) return;
         }
         blocks.put(object("type", type));
+    }
+
+    /**
+     * 在同一事务内保存流水和会话回执。
+     */
+    private void bookDraft(JSONObject source, String amount, String date, String categoryId, String note,
+                           JSONArray clues, boolean automatic) throws JSONException {
+        LedgerDb.Category category = db.findCategory(categoryId);
+        if (category == null || category.hidden || !category.type.equals(source.optString("type"))) {
+            throw new IllegalArgumentException("请选择可用分类");
+        }
+        LedgerDb.Entry entry = new LedgerDb.Entry();
+        entry.type = source.getString("type");
+        entry.amountMinor = LedgerMath.parseMoney(amount, false);
+        entry.businessDate = date;
+        entry.categoryId = categoryId;
+        entry.note = note.trim();
+        entry.sourceText = source.optString("sourceText");
+        entry.clues = cleanClues(clues);
+        android.database.sqlite.SQLiteDatabase transaction = db.getWritableDatabase();
+        int oldChatLength = chat.length();
+        int oldPersisted = persistedMessages;
+        JSONObject oldDraft = draft;
+        try {
+            transaction.beginTransaction();
+            try {
+                db.saveEntry(entry);
+                chat.put(object("kind", "receipt", "entry", LedgerDb.entryJson(entry), "undone", false, "steps",
+                        automatic ? new JSONArray().put("校验记账信息").put("自动入账") : null));
+                draft = null;
+                persist();
+                transaction.setTransactionSuccessful();
+            } finally {
+                transaction.endTransaction();
+            }
+        } catch (RuntimeException | JSONException error) {
+            chat.remove(oldChatLength);
+            draft = oldDraft;
+            persistedMessages = oldPersisted;
+            throw error;
+        }
     }
 }

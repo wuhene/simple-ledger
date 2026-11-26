@@ -1,15 +1,21 @@
 # 爱记账项目交接文档
 
-更新：2026-11-26 · 当前需求分支：`2026-11-25-2` · 状态：爱记账 Android 0.2.3 已在模拟器自测，待真机复验
+更新：2026-11-26 · 当前需求分支：`2026-11-26-1` · 状态：爱记账 Android 0.2.5 待用户验收
 
 ## 接手先读
 
 1. 阅读 [`AGENTS.md`](AGENTS.md) 的分支、Wiki、提交与验收约定。每次开发改动同步更新本文件、AGENTS 待办和对应需求 Wiki，并与代码一起提交推送。
 2. Web 需求阅读 `wiki/2026-09-30-init/`、`wiki/2026-09-30-1/` 与 `wiki/2026-10-09/`；Android 需求阅读 [`wiki/2026-10-10/原生Android-PRD与验收.md`](wiki/2026-10-10/原生Android-PRD与验收.md) 和 [`开发进度.md`](wiki/2026-10-10/开发进度.md)。
 3. 检查 `git status --short --branch` 并更新 `master`。Web、Android 新需求都从 `master` 按日期开需求分支；不再用平台专属主分支。
-4. 当前需求先读 [账本 Skill 与真机排版](wiki/2026-11-26/账本Skill与真机排版.md)。Android 界面基线见 [Android 与 Web 对齐](wiki/2026-11-25-2/Android与Web对齐.md)。旧版索引与会话细节见 [智能索引与分月备份](wiki/2026-11-25/智能索引与分月备份.md) 和 [AI 跨年排行与追问](wiki/2026-11-25-1/AI跨年排行与追问.md)。
+4. 当前需求先读 [AI 记账模式与聊天对齐](wiki/2026-11-26-1/AI记账模式与聊天对齐.md)。上一版见 [账本 Skill 与真机排版](wiki/2026-11-26/账本Skill与真机排版.md)，Android 界面基线见 [Android 与 Web 对齐](wiki/2026-11-25-2/Android与Web对齐.md)。
 
-## 当前交接（`2026-11-26`）
+## 当前交接（`2026-11-26-1`）
+
+- 本分支承接 `2026-11-26`，Android 版本 0.2.5、versionCode 9。独立验收版继续内置 10 万笔合成流水。
+- 在两端的 AI 助手设置保存「需确认」或「自动记账」。Web 模式单独存入浏览器，Android 存入 SQLite 元数据；模型地址、模型 ID 和密钥仍按原有方式仅在本次运行中有效。切换模式不会提交旧草稿。
+- 两种模式在各自本机事务里写入流水与会话回执。没有有效分类时保留草稿。Web 的 `assistant.js`、`storage.js` 和原生的 `LedgerAssistant.java`、`LedgerDb.java` 维护写入路径，`MainActivity.java` 维护原生助手页面。下一步按 Wiki 的验收步骤在真机复核。
+
+## 上一需求交接（`2026-11-26`）
 
 - 本分支承接 `2026-11-25-2` 的原生验收版，Android 版本 0.2.4、versionCode 8。独立验收 APK 内置 15 年、10 万笔合成流水；普通 APK 继续沿用原应用 ID 和原有数据库。验收后再合入主线。
 - 账本 Agent 共用 [Skill 契约](project/shared/assets/ledger-skill-catalog.txt)。Web 的 `assistant-bridge.js` 和 Android 的 `LedgerAssistant.java` 向模型提供该契约，Web 的 `ledger-skills.js` 和原生的 `LedgerSkills.java` 在本机执行双路检索、排行等操作。`assistant.js` 和 `MainActivity.java` 展示并保存可折叠的执行步骤。Gradle 和 SDK 打包脚本包含同一份资产。

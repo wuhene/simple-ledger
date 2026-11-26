@@ -9,6 +9,8 @@ const typeName = type => type === INCOME ? "收入" : "支出";
 
 export function createAssistant({ getData, escape: E, render, reload, isOpen, openChat }) {
   let config = { base: "", model: "", key: "" };
+  const bookingModeKey = "ai-ledger-booking-mode";
+  let bookingMode = localStorage.getItem(bookingModeKey) === "auto" ? "auto" : "confirm";
   let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
   let progress = "", requestText = "";
   let chat = [], previousInput = "";
@@ -57,12 +59,16 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
 
   function persistSession() {
     if (!chat.length && !draft) return;
-    const firstMessage = chat.find(item => item.kind === "text" && item.user);
-    const session = structuredClone({ id: activeId, chat, context, draft, input, previousInput,
-      title: [...(firstMessage?.text || "新会话")].slice(0, 26).join(""),
-      updatedAt: new Date().toISOString() });
+    const session = sessionSnapshot(chat, draft);
     sessions.set(activeId, session);
     return saveHistory(saveAssistantSession(session));
+  }
+
+  function sessionSnapshot(messages, currentDraft) {
+    const firstMessage = messages.find(item => item.kind === "text" && item.user);
+    return structuredClone({ id: activeId, chat: messages, context, draft: currentDraft, input, previousInput,
+      title: [...(firstMessage?.text || "新会话")].slice(0, 26).join(""),
+      updatedAt: new Date().toISOString() });
   }
 
   function stopRequest() {
@@ -108,6 +114,10 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       '<label>模型 ID<input class="field" name="model" maxlength="150" value="' + E(config.model) + '" placeholder="填服务商提供的模型 ID"></label>' +
       '<label>API Key<input class="field" name="key" type="password" autocomplete="off" maxlength="512" placeholder="' +
       (config.key ? "已设置 · 留空沿用" : "模型需要认证时填写") + '"></label>' +
+      '<label>AI 记账模式<select class="field" name="bookingMode"><option value="confirm"' +
+      (bookingMode === "confirm" ? " selected" : "") + '>需确认</option><option value="auto"' +
+      (bookingMode === "auto" ? " selected" : "") + '>自动记账</option></select></label>' +
+      paragraph(E, "自动记账会直接保存信息完整的流水，保存后可在聊天中撤销。") +
       paragraph(E, "聊天会向模型发送输入和必要上下文。分析账本时会用到相关汇总，原始流水和备注由本机展示。配置在刷新前有效。") +
       '<div class="ai-actions"><button class="primary" name="action" value="save"' + (testing ? " disabled" : "") + '>保存设置</button>' +
       '<button class="outline" name="action" value="test"' + (testing ? " disabled" : "") + '>' + (testing ? "测试中…" : "测试连接") + '</button>' +
@@ -477,11 +487,17 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
   async function submitConfig(form, action) {
     if (testing) return;
     const fields = new FormData(form);
+    if (action !== "test") {
+      const nextMode = fields.get("bookingMode") === "auto" ? "auto" : "confirm";
+      localStorage.setItem(bookingModeKey, nextMode);
+      bookingMode = nextMode;
+    }
     const base = fields.get("base").trim(), key = fields.get("key").trim();
     const next = { base, model: fields.get("model").trim(),
       key: key || (base === config.base ? config.key : "") };
     if (!next.base || !next.model) {
-      form.querySelector('[role="status"]').textContent = "请填写 API 地址和模型 ID。";
+      form.querySelector('[role="status"]').textContent = action !== "test" && !next.base && !next.model ?
+        "记账模式已保存。填写 API 地址和模型 ID 后即可使用助手。" : "请填写 API 地址和模型 ID。";
       return;
     }
     config = next;
@@ -519,6 +535,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     say(text, true);
     input = "";
     const settings = config;
+    const automatic = bookingMode === "auto";
     const currentRequest = new AbortController();
     request = currentRequest;
     requestText = text;
@@ -573,6 +590,22 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
           sourceText: previous && followsUp ? (previous + "\n" + text).slice(0, 1200) : text,
           clueText: intent.clues.map(clue => clue.type + "：" + clue.value).join("\n") };
         context = { lastQuery: context?.lastQuery };
+        if (automatic && category) {
+          // A write in progress cannot be interrupted or moved to another session.
+          request = null;
+          progress = requestText = "";
+          refresh();
+          try {
+            await bookDraft(["校验记账信息", "自动入账"]);
+          } catch {
+            say(draft ? "自动记账未能保存，可以核对草稿后重试。" : "已入账，账本页面稍后刷新。");
+          } finally {
+            busy = false;
+            persistSession();
+            refresh();
+          }
+          return;
+        }
         say(intent.text || (category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。"));
         chat[chat.length - 1].steps = ["生成记账草稿 · 等待确认"];
       } else if (["search", "stats", "insight"].includes(intent.kind)) {
@@ -633,25 +666,10 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
   async function saveDraft(form) {
     if (busy || !draft) return;
     const fields = new FormData(form);
-    for (const name of ["amount", "note", "date", "categoryId"]) draft[name] = fields.get(name);
+    for (const name of ["amount", "note", "date", "categoryId", "clueText"]) draft[name] = fields.get(name);
     busy = true;
     try {
-      const record = validateIntent({ ...draft, category: "", kind: "record" }, localToday());
-      if (!available().some(item => item.id === draft.categoryId && item.type === draft.type)) {
-        throw new Error("请选择当前收支类型下的有效分类。");
-      }
-      const now = new Date().toISOString();
-      const clues = cleanClues(String(fields.get("clueText") || "").split("\n").flatMap(line => {
-        const divider = line.search(/[:：]/);
-        return divider > 0 ? [{ type: line.slice(0, divider), value: line.slice(divider + 1) }] : [];
-      }));
-      const entry = { id: draft.id, type: record.type, amountMinor: record.amountMinor,
-        businessDate: record.date, categoryId: draft.categoryId, note: record.note, createdAt: now, updatedAt: now,
-        ...(draft.sourceText ? { sourceText: draft.sourceText } : {}), ...(clues.length ? { clues } : {}) };
-      await putEntry(entry);
-      draft = null;
-      chat.push({ kind: "receipt", entry, undone: false });
-      await reload();
+      await bookDraft();
     } catch (error) {
       say(error.message || "账单保存失败，请重试。");
     } finally {
@@ -659,6 +677,28 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       persistSession();
       refresh();
     }
+  }
+
+  async function bookDraft(steps) {
+    const record = validateIntent({ ...draft, category: "", kind: "record" }, localToday());
+    if (!available().some(item => item.id === draft.categoryId && item.type === draft.type)) {
+      throw new Error("请选择当前收支类型下的有效分类。");
+    }
+    const now = new Date().toISOString();
+    const clues = cleanClues(String(draft.clueText || "").split("\n").flatMap(line => {
+      const divider = line.search(/[:：]/);
+      return divider > 0 ? [{ type: line.slice(0, divider), value: line.slice(divider + 1) }] : [];
+    }));
+    const entry = { id: draft.id, type: record.type, amountMinor: record.amountMinor,
+      businessDate: record.date, categoryId: draft.categoryId, note: record.note, createdAt: now, updatedAt: now,
+      ...(draft.sourceText ? { sourceText: draft.sourceText } : {}), ...(clues.length ? { clues } : {}) };
+    const receipt = { kind: "receipt", entry, undone: false, steps };
+    const session = sessionSnapshot([...chat, receipt], null);
+    await putEntry(entry, session);
+    sessions.set(activeId, session);
+    draft = null;
+    chat.push(receipt);
+    await reload();
   }
 
   async function act(control) {

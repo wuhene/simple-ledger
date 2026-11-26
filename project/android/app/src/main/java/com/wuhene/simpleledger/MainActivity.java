@@ -1018,7 +1018,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.4。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.5。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -2002,15 +2002,22 @@ public final class MainActivity extends Activity {
     private void renderAssistantHeader(LinearLayout shell) {
         LinearLayout bar = row();
         padding(bar, 18, 4);
-        bar.addView(text("AI 助手", 20, DARK, true), new LinearLayout.LayoutParams(0, dp(52), 1));
-        bar.addView(ghost("历史", () -> navigate("assistantHistory", null)), lp(50, 48));
-        bar.addView(ghost("新会话", () -> {
+        bar.addView(text("AI 助手", 18, DARK, true), new LinearLayout.LayoutParams(0, dp(48), 1));
+        TextView history = ghost("历史", () -> navigate("assistantHistory", null));
+        history.setTextColor(DARK);
+        history.setTextSize(13);
+        bar.addView(history, lp(50, 48));
+        TextView newSession = ghost("新会话", () -> {
             stopAssistant(false);
             assistant.open("");
             assistantFollowBottom = true;
             render();
-        }), lp(66, 48));
+        });
+        newSession.setTextColor(DARK);
+        newSession.setTextSize(13);
+        bar.addView(newSession, lp(58, 48));
         TextView settings = ghost("⚙", () -> navigate("assistantSettings", null));
+        settings.setTextColor(DARK);
         settings.setContentDescription("模型设置");
         bar.addView(settings, lp(42, 48));
         shell.addView(bar);
@@ -2021,7 +2028,7 @@ public final class MainActivity extends Activity {
      * 渲染历史消息、结构化卡片和待确认草稿。
      */
     private void renderAssistantMessages(LinearLayout body) {
-        padding(body, 16, 12);
+        padding(body, 16, 16);
         JSONArray messages = assistant.messages();
         if (messages.length() == 0) {
             LinearLayout intro = column();
@@ -2053,15 +2060,19 @@ public final class MainActivity extends Activity {
         } else if (!assistant.configured()) {
             body.addView(ghost("连接模型继续聊天", () -> navigate("assistantSettings", null)));
         }
+        boolean inReply = false;
         for (int i = 0; i < messages.length(); i++) {
             JSONObject item = messages.optJSONObject(i);
             if (item == null) continue;
-            space(body, 10);
+            if (i > 0) space(body, inReply && !item.optBoolean("user") ? 9 : 19);
             if (item.optBoolean("user")) {
-                TextView bubble = text(item.optString("text"), 15, themeId == 0 ? WHITE : ACTION_TEXT, false);
+                inReply = false;
+                TextView bubble = text(item.optString("text"), 15, WHITE, false);
                 bubble.setTextIsSelectable(true);
                 bubble.setMaxWidth(dp(320));
-                bubble.setBackground(shape(themeId == 0 ? 0xff4c3605 : ACTION, 18));
+                GradientDrawable bubbleBackground = shape(assistantBubbleColor(), 16);
+                bubbleBackground.setCornerRadii(new float[]{dp(16), dp(16), dp(16), dp(16), dp(5), dp(5), dp(16), dp(16)});
+                bubble.setBackground(bubbleBackground);
                 padding(bubble, 14, 10);
                 LinearLayout.LayoutParams position = lp(-2, -2);
                 position.gravity = Gravity.END;
@@ -2069,8 +2080,8 @@ public final class MainActivity extends Activity {
                 body.addView(bubble, position);
                 continue;
             }
-            TextView sender = text("✦  爱记账助手", 13, GREEN, true);
-            body.addView(sender, lp(-1, 28));
+            if (!inReply) renderAssistantSender(body);
+            inReply = true;
             renderSkillTrace(body, item.optJSONArray("steps"));
             switch (item.optString("kind")) {
                 case "receipt": renderAssistantReceipt(body, item); break;
@@ -2085,12 +2096,14 @@ public final class MainActivity extends Activity {
         JSONObject draft = assistant.draft();
         if (draft != null) renderAssistantDraft(body, draft);
         if (assistantBusy) {
-            space(body, 10);
+            space(body, inReply ? 9 : 19);
+            if (!inReply) renderAssistantSender(body);
             LinearLayout progress = row();
+            TextView dot = text("●", 10, GREEN, false);
+            progress.addView(dot, lp(15, 27));
             TextView label = text(assistantProgress, 13, MUTED, false);
-            progress.addView(label, new LinearLayout.LayoutParams(0, dp(44), 1));
+            progress.addView(label, new LinearLayout.LayoutParams(0, dp(27), 1));
             label.post(() -> updateSkillProgress(label));
-            progress.addView(ghost("停止", () -> stopAssistant(true)), lp(58, 44));
             body.addView(progress);
         }
         space(body, 8);
@@ -2101,9 +2114,16 @@ public final class MainActivity extends Activity {
      */
     private void renderAssistantComposer(LinearLayout shell) {
         rule(shell, LINE);
+        LinearLayout dock = column();
+        padding(dock, 12, 8);
         LinearLayout bar = row();
-        padding(bar, 10, 8);
+        padding(bar, 4, 4);
+        bar.setGravity(Gravity.BOTTOM);
+        bar.setBackground(outline(0xfff7f8fa, 17, LINE));
         assistantComposer = editField("输入一笔账，或聊聊花销", assistant.input, 600, false);
+        assistantComposer.setBackgroundColor(Color.TRANSPARENT);
+        assistantComposer.setMinHeight(dp(44));
+        assistantComposer.setTextSize(16);
         assistantComposer.setMaxLines(4);
         assistantComposer.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEND);
         assistantComposer.setOnEditorActionListener((view, action, event) -> {
@@ -2131,13 +2151,16 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(android.text.Editable value) {}
         });
         bar.addView(assistantComposer, new LinearLayout.LayoutParams(0, -2, 1));
-        LinearLayout.LayoutParams action = lp(62, 48);
-        action.leftMargin = dp(8);
-        bar.addView(button(assistantBusy ? "停止" : "发送", true, () -> {
+        LinearLayout.LayoutParams action = lp(58, 44);
+        action.leftMargin = dp(6);
+        TextView send = button(assistantBusy ? "停止" : "发送", !assistantBusy, () -> {
             if (assistantBusy) stopAssistant(true);
             else sendAssistant(assistantComposer.getText().toString());
-        }), action);
-        shell.addView(bar);
+        });
+        send.setMinimumHeight(dp(44));
+        bar.addView(send, action);
+        dock.addView(bar);
+        shell.addView(dock);
     }
 
     /**
@@ -2210,6 +2233,15 @@ public final class MainActivity extends Activity {
         EditText key = assistantSettingField(form, "API Key", assistant.key.isEmpty() ? "按服务商要求填写" : "已在本次运行中填写", "");
         for (EditText field : new EditText[]{base, model, key}) field.setBackground(outline(WHITE, 12, LINE));
         key.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        form.addView(text("AI 记账模式", 14, DARK, true));
+        android.widget.Spinner bookingMode = new android.widget.Spinner(this);
+        android.widget.ArrayAdapter<String> modes = new android.widget.ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, new String[]{"需确认", "自动记账"});
+        bookingMode.setAdapter(modes);
+        bookingMode.setContentDescription("AI 记账模式");
+        bookingMode.setSelection(db.assistantAutoBooking() ? 1 : 0);
+        form.addView(bookingMode, lp(-1, 48));
+        form.addView(text("自动记账会直接保存信息完整的流水，保存后可在聊天中撤销。", 13, MUTED, false));
         space(form, 10);
         form.addView(text("模型会收到输入、必要的会话上下文和相关汇总。原始流水、备注和定位由本机处理。配置在本次运行中有效。", 13, MUTED, false));
         space(form, 14);
@@ -2231,6 +2263,11 @@ public final class MainActivity extends Activity {
         testButton.setBackground(outline(WHITE, 12, LINE));
         actions.addView(button("保存设置", true, () -> {
             try {
+                db.setAssistantAutoBooking(bookingMode.getSelectedItemPosition() == 1);
+                if (base.getText().toString().trim().isEmpty() && model.getText().toString().trim().isEmpty()) {
+                    status.setText("记账模式已保存。填写 API 地址和模型 ID 后即可使用助手。");
+                    return;
+                }
                 assistant.saveConfiguration(base.getText().toString(), model.getText().toString(), key.getText().toString());
                 hideKeyboard();
                 status.setText("已保存");
@@ -2448,14 +2485,38 @@ public final class MainActivity extends Activity {
     private void renderAssistantReceipt(LinearLayout body, JSONObject item) {
         JSONObject entry = item.optJSONObject("entry");
         if (entry == null) return;
-        LinearLayout receipt = card();
+        LinearLayout receipt = column();
+        receipt.setBackground(outline(WHITE, 14, LINE));
+        padding(receipt, 12, 11);
         boolean undone = item.optBoolean("undone");
-        receipt.addView(text(undone ? "已撤销" : "已入账", 16, DARK, true));
-        chatValue(receipt, entry.optString("note"), money(entry.optLong("amountMinor")));
-        if (!undone) receipt.addView(ghost("撤销入账", () -> {
-            try { assistant.undo(entry.optString("id")); render(); }
-            catch (Exception error) { error(error); }
-        }));
+        LinearLayout main = row();
+        TextView mark = text(undone ? "↶" : "✓", 15, GREEN, true);
+        mark.setGravity(Gravity.CENTER);
+        mark.setBackground(shape(SOFT, 9));
+        main.addView(mark, lp(28, 28));
+        LinearLayout labels = column();
+        labels.addView(text(undone ? "已撤销" : "已入账", 16, DARK, true));
+        String note = entry.optString("note");
+        if (!note.isEmpty()) labels.addView(text(note, 13, MUTED, false));
+        LinearLayout.LayoutParams labelSize = new LinearLayout.LayoutParams(0, -2, 1);
+        labelSize.setMargins(dp(8), 0, dp(8), 0);
+        main.addView(labels, labelSize);
+        TextView value = text(money(entry.optLong("amountMinor")), 15, DARK, true);
+        value.setFontFeatureSettings("'tnum'");
+        main.addView(value);
+        receipt.addView(main);
+        if (!undone) {
+            TextView undo = ghost("撤销入账", () -> {
+                try { assistant.undo(entry.optString("id")); render(); }
+                catch (Exception error) { error(error); }
+            });
+            undo.setEnabled(!assistantBusy);
+            undo.setTextSize(13);
+            padding(undo, 8, 0);
+            LinearLayout.LayoutParams undoSize = lp(-2, 44);
+            undoSize.gravity = Gravity.END;
+            receipt.addView(undo, undoSize);
+        }
         body.addView(receipt);
     }
 
@@ -2464,12 +2525,26 @@ public final class MainActivity extends Activity {
      */
     private void renderAssistantDraft(LinearLayout body, JSONObject draft) {
         space(body, 12);
-        LinearLayout card = card();
-        card.addView(text("确认记账", 18, DARK, true));
+        LinearLayout card = column();
+        card.setBackground(outline(WHITE, 15, LINE));
+        padding(card, 14, 12);
+        LinearLayout header = row();
+        String type = LedgerDb.INCOME.equals(draft.optString("type")) ? "收入" : "支出";
+        header.addView(text(type + "草稿", 16, DARK, true), new LinearLayout.LayoutParams(0, -2, 1));
+        header.addView(text("待确认", 13, MUTED, false));
+        card.addView(header);
         space(card, 8);
-        EditText amount = assistantSettingField(card, "金额", "0.00", draft.optString("amount"));
+        LinearLayout pair = row();
+        pair.setGravity(Gravity.TOP);
+        LinearLayout amountColumn = column(), dateColumn = column();
+        LinearLayout.LayoutParams amountSize = new LinearLayout.LayoutParams(0, -2, 1);
+        amountSize.rightMargin = dp(8);
+        pair.addView(amountColumn, amountSize);
+        pair.addView(dateColumn, new LinearLayout.LayoutParams(0, -2, 1));
+        card.addView(pair);
+        EditText amount = assistantSettingField(amountColumn, "金额（元）", "0.00", draft.optString("amount"));
         amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        EditText date = assistantSettingField(card, "日期", "YYYY-MM-DD", draft.optString("date"));
+        EditText date = assistantSettingField(dateColumn, "日期", "YYYY-MM-DD", draft.optString("date"));
         List<LedgerDb.Category> categories = db.categories(draft.optString("type"), false);
         List<String> choices = new ArrayList<>();
         choices.add("请选择分类");
@@ -2484,17 +2559,27 @@ public final class MainActivity extends Activity {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         category.setAdapter(adapter);
         category.setSelection(active);
-        card.addView(text("分类", 14, DARK, true));
-        card.addView(category, lp(-1, 48));
-        EditText note = assistantSettingField(card, "备注", "添加备注", draft.optString("note"));
+        LinearLayout details = row();
+        details.setGravity(Gravity.TOP);
+        LinearLayout categoryColumn = column(), noteColumn = column();
+        LinearLayout.LayoutParams categorySize = new LinearLayout.LayoutParams(0, -2, 1);
+        categorySize.rightMargin = dp(8);
+        details.addView(categoryColumn, categorySize);
+        details.addView(noteColumn, new LinearLayout.LayoutParams(0, -2, 1));
+        card.addView(details);
+        categoryColumn.addView(text("分类", 14, DARK, true));
+        space(categoryColumn, 5);
+        FrameLayout categoryField = new FrameLayout(this);
+        categoryField.setBackground(outline(0xfff7f8fa, 12, LINE));
+        categoryField.addView(category, new FrameLayout.LayoutParams(-1, -1));
+        categoryColumn.addView(categoryField, lp(-1, 48));
+        EditText note = assistantSettingField(noteColumn, "备注", "添加备注", draft.optString("note"));
         card.addView(text("检索线索", 14, DARK, true));
         EditText clues = editField("每行一项，如 商家：四季民福", clueLines(draft.optJSONArray("clues")), 1200, false);
         clues.setMinLines(2);
         card.addView(clues, lp(-1, -2));
         space(card, 8);
         LinearLayout actions = row();
-        actions.addView(ghost("取消草稿", () -> { assistant.discardDraft(); hideKeyboard(); assistantFollowBottom = true; render(); }),
-                new LinearLayout.LayoutParams(0, dp(48), 1));
         actions.addView(button("确认入账", true, () -> {
             try {
                 int selected = category.getSelectedItemPosition();
@@ -2505,7 +2590,12 @@ public final class MainActivity extends Activity {
                 assistantFollowBottom = true;
                 render();
             } catch (Exception error) { error(error); }
-        }), new LinearLayout.LayoutParams(0, dp(48), 1));
+        }), lp(86, 44));
+        TextView cancel = ghost("取消草稿", () -> { assistant.discardDraft(); hideKeyboard(); assistantFollowBottom = true; render(); });
+        cancel.setBackground(outline(WHITE, 14, LINE));
+        LinearLayout.LayoutParams cancelSize = lp(86, 44);
+        cancelSize.leftMargin = dp(6);
+        actions.addView(cancel, cancelSize);
         card.addView(actions);
         body.addView(card);
     }
@@ -3446,5 +3536,33 @@ public final class MainActivity extends Activity {
         if (!hidden && baseline > 0) {
             chatValue(card, label + "变化", String.format(Locale.CHINA, "%+.1f%%", 100d * (current - baseline) / baseline));
         }
+    }
+
+    /**
+     * 绘制与 Web 版统一的助手署名。
+     */
+    private void renderAssistantSender(LinearLayout body) {
+        LinearLayout sender = row();
+        TextView spark = text("✦", 16, GREEN, true);
+        spark.setGravity(Gravity.CENTER);
+        spark.setBackground(shape(SOFT, 9));
+        sender.addView(spark, lp(27, 27));
+        TextView label = text("爱记账助手", 13, MUTED, true);
+        label.setPadding(dp(7), 0, 0, 0);
+        sender.addView(label);
+        body.addView(sender);
+        space(body, 9);
+    }
+
+    /**
+     * 返回当前主题在两端使用的聊天气泡底色。
+     */
+    private int assistantBubbleColor() {
+        return switch (themeId) {
+            case 1, 4 -> 0xff184d39;
+            case 2, 5 -> 0xff20486b;
+            case 3 -> 0xff503963;
+            default -> 0xff523907;
+        };
     }
 }
