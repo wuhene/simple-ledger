@@ -1,3 +1,5 @@
+import { cleanClues, validLocation } from "./ledger-search.js";
+
 export const SCHEMA_VERSION = 1;
 export const MAX_MINOR = 9999999999;
 export const EXPENSE = "EXPENSE";
@@ -58,6 +60,19 @@ export function iconFor(name) {
   if (/宠物/.test(name)) return "pet";
   if (/汽车/.test(name)) return "car";
   return "other";
+}
+
+export function isDiningCategory(category) {
+  return category?.type === EXPENSE && category.name === "餐饮";
+}
+
+export function diningCategoryRepair(categories) {
+  const dining = categories.find(isDiningCategory);
+  if (dining) return dining.hidden ? { ...dining, hidden: false } : null;
+  const seed = initialCategories().find(isDiningCategory);
+  return categories.some(category => category.id === seed.id)
+    ? { ...seed, id: crypto.randomUUID(), isBuiltin: false }
+    : seed;
 }
 
 export function localToday(now = new Date()) {
@@ -267,14 +282,14 @@ export function validateLedger(data, today = localToday()) {
   )
     throw new Error("备份版本或结构无效");
   if (
-    data.entries.length > 100000 ||
+    data.entries.length > 120000 ||
     data.categories.length > 1000 ||
     data.budgets.length > 2000
   )
     throw new Error("备份记录数量超出限制");
   const ids = new Set(),
     names = new Set(),
-    categoryIds = new Set();
+    categoryIds = new Map();
   for (const c of data.categories) {
     if (
       !c ||
@@ -294,13 +309,13 @@ export function validateLedger(data, today = localToday()) {
     const key = `${c.type}:${c.name}`;
     if (names.has(key)) throw new Error("备份中存在重复分类名称");
     names.add(key);
-    categoryIds.add(c.id);
+    categoryIds.set(c.id, c);
   }
   for (const type of [EXPENSE, INCOME])
     if (!data.categories.some((c) => c.type === type && !c.hidden))
       throw new Error("每种收支至少需要一个可用分类");
   for (const e of data.entries) {
-    const c = data.categories.find((x) => x.id === e?.categoryId);
+    const c = categoryIds.get(e?.categoryId);
     if (
       !e ||
       typeof e.id !== "string" ||
@@ -315,6 +330,9 @@ export function validateLedger(data, today = localToday()) {
       c.type !== e.type ||
       typeof e.note !== "string" ||
       [...e.note].length > 200 ||
+      (e.sourceText !== undefined && (typeof e.sourceText !== "string" || e.sourceText.length > 1200)) ||
+      (e.clues !== undefined && (!Array.isArray(e.clues) || cleanClues(e.clues).length !== e.clues.length)) ||
+      (e.location !== undefined && e.location !== null && !validLocation(e.location)) ||
       !Number.isFinite(Date.parse(e.createdAt)) ||
       !Number.isFinite(Date.parse(e.updatedAt))
     )

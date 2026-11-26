@@ -1,7 +1,6 @@
 import {
   EXPENSE,
   INCOME,
-  achievements,
   categoryTotals,
   currentMonth,
   dailyPeak,
@@ -10,7 +9,9 @@ import {
   entriesInBounds,
   expressionMinor,
   groupEntries,
+  iconFor,
   iconKeys,
+  isDiningCategory,
   isValidDate,
   localToday,
   money,
@@ -21,11 +22,13 @@ import {
   sortEntries,
   totals,
   trend,
-  validateLedger,
 } from "./model.js";
 import {
   loadLedger,
+  categoryInUse,
   putEntry,
+  queryEntries,
+  readEntry,
   removeEntry,
   putCategory,
   putCategories,
@@ -33,9 +36,11 @@ import {
   putBudget,
   removeBudget,
   putMeta,
-  replaceLedger,
-  clearLedger,
 } from "./storage.js";
+import { createAssistant } from "./assistant.js";
+import { categoryIconFills, categoryIconPaths } from "./category-icons.js";
+import { appendManualPlace, cleanTerms, cluesWithPlace, currentLedgerLocation } from "./ledger-search.js";
+import { rollupAchievements, summarizeRollups } from "./ledger-rollups.js";
 
 const $ = (s) => document.querySelector(s),
   phone = $("#phone");
@@ -48,6 +53,19 @@ const E = (s) =>
       ],
   );
 const uid = () => crypto.randomUUID();
+const themes = [
+  ["amber", "亮黄"], ["sage", "浅青绿"], ["blue", "浅雾蓝"],
+  ["plum", "浅灰紫"], ["ink-green", "深墨绿"], ["ink-blue", "深墨蓝"],
+];
+const themeStorageKey = "simple-ledger.theme";
+let activeTheme = themes[0][0];
+try {
+  const savedTheme = localStorage.getItem(themeStorageKey);
+  if (themes.some(([id]) => id === savedTheme)) activeTheme = savedTheme;
+} catch {
+  // The default theme also works when this browser blocks local preferences.
+}
+document.documentElement.dataset.theme = activeTheme;
 const cName = (id) =>
   state.data.categories.find((c) => c.id === id)?.name || "未知分类";
 const cById = (id) => state.data.categories.find((c) => c.id === id);
@@ -90,8 +108,11 @@ const state = {
   billYear: Number(localToday().slice(0, 4)),
   reportMonth: currentMonth(),
   reportYear: Number(localToday().slice(0, 4)),
-  detailId: null,
+  detailEntry: null,
   detailOrigin: "home",
+  searchText: "",
+  searchRows: [],
+  searchLimit: 40,
   filter: null,
   entry: null,
   entryOrigin: "home",
@@ -99,11 +120,11 @@ const state = {
   catType: EXPENSE,
   modal: null,
   toast: null,
+  savedEntry: null,
   shareUrl: null,
   shareOptions: { amounts: true, ranking: false, achievements: false },
-  lastCategory: { [EXPENSE]: "expense-0", [INCOME]: "income-0" },
   undo: null,
-  showAllCats: false,
+  entryDockEntering: false,
   showAllMonths: false,
   showAllRanking: false,
   trendPoint: null,
@@ -111,49 +132,44 @@ const state = {
   scrollByPage: {},
   motion: "",
 };
+let assistantOrigin = "home", assistantSettingsOrigin = "settings";
+const assistant = createAssistant({
+  getData: () => state.data,
+  escape: E,
+  render,
+  reload,
+  isOpen: () => ["assistant", "assistantSettings", "assistantHistory"].includes(state.page),
+  openPlacePicker,
+  openChat: () => {
+    navigate("assistant");
+  },
+});
 
 function activeCategories(type, includeHidden = false) {
   return state.data.categories
     .filter((c) => c.type === type && (includeHidden || !c.hidden))
-    .sort((a, b) => a.sortIndex - b.sortIndex);
+    .sort((a, b) => Number(isDiningCategory(b)) - Number(isDiningCategory(a)) || a.sortIndex - b.sortIndex);
 }
 function entryRows(entries) {
   const groups = groupEntries(entries);
   if (!groups.length)
     return `<div class="empty"><strong>这个范围暂无记录</strong><span>试试切换日期，或记下第一笔。</span></div>`;
+  const today = localToday();
+  const yesterday = shiftDate(today, -1);
   return groups
-    .map(
-      (g) =>
-        `<div class="group-head"><span>${E(fullDate(g.date))}</span><span>收入 ${formatYen(g.income)} · 支出 ${formatYen(g.expense)}</span></div><div class="list">${g.rows.map((e) => `<button class="record" data-action="detail" data-id="${E(e.id)}"><span class="ico">${categoryIcon(cById(e.categoryId))}</span><span class="record-text">${E(cName(e.categoryId))}${e.note ? `<small>${E(e.note)}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`).join("")}</div>`,
-    )
+    .map((g) => {
+      const relativeDay = g.date === today ? "今天" : g.date === yesterday ? "昨天" : "";
+      const weekday = weekdays[new Date(`${g.date}T12:00:00`).getDay()];
+      const day = state.page === "home"
+        ? relativeDay ? `${relativeDay} · ${dateText(g.date)}` : `${dateText(g.date)} · ${weekday}`
+        : fullDate(g.date);
+      return `<div class="group-head"><time datetime="${E(g.date)}" title="${E(fullDate(g.date))}">${E(day)}</time><span>${g.income ? `收入 ${formatYen(g.income)}` : ""}${g.income && g.expense ? " · " : ""}${g.expense ? `支出 ${formatYen(g.expense)}` : ""}</span></div><div class="list">${g.rows.map((e) => {
+          const category = cById(e.categoryId), recent = state.savedEntry?.id === e.id && state.savedEntry.page === state.page;
+          return `<button class="record ${recent ? "record-saved" : ""}" data-action="detail" data-id="${E(e.id)}"><span class="ico category-icon">${categoryIcon(category)}</span><span class="record-text">${E(e.note || cName(e.categoryId))}${e.note ? `<small>${E(cName(e.categoryId))}</small>` : ""}</span><strong class="${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${format(e.amountMinor)}</strong></button>`;
+        }).join("")}</div>`;
+    })
     .join("");
 }
-const iconPaths = {
-  food: '<path d="M4 12h16M6 12a6 6 0 0 0 12 0M8 8l-1-3m9 3 1-3"/>',
-  bag: '<path d="M4 8h16l-1.5 13h-13L4 8Zm4 0V6a4 4 0 0 1 8 0v2"/>',
-  home: '<path d="m3 11 9-8 9 8v10H3V11Zm6 10v-7h6v7"/>',
-  bus: '<rect x="4" y="4" width="16" height="15" rx="3"/><path d="M4 11h16M8 19v2m8-2v2M8 15h1m6 0h1"/>',
-  gift: '<rect x="3" y="9" width="18" height="12" rx="2"/><path d="M2 9h20M12 9v12M12 9c-7 0-7-6-4-6s4 6 4 6Zm0 0c7 0 7-6 4-6s-4 6-4 6Z"/>',
-  heart: '<path d="M20 9c0 5-8 11-8 11S4 14 4 9a4.5 4.5 0 0 1 8-2 4.5 4.5 0 0 1 8 2Z"/>',
-  book: '<path d="M4 4h14a2 2 0 0 1 2 2v15H6a2 2 0 0 1-2-2V4Zm0 14a2 2 0 0 1 2-2h14M8 8h8"/>',
-  briefcase: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M9 7V4h6v3M3 13h18M10 13v2h4v-2"/>',
-  medical: '<path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6V3Z"/>',
-  pet: '<path d="M7 14c-3 2-1 7 3 6h4c4 1 6-4 3-6l-3-3h-4l-3 3ZM5 8h.01M9 5h.01M15 5h.01M19 8h.01"/>',
-  car: '<path d="M4 11 6 5h12l2 6v8H4v-8Zm0 0h16M7 15h2m6 0h2M6 19v2m12-2v2"/>',
-  other: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8m-4-4h8"/>',
-  daily: '<rect x="4" y="7" width="16" height="14" rx="2"/><path d="M7 7V4h10v3M8 12h8M8 16h5"/>',
-  veg: '<path d="M8 20C2 13 5 5 19 4c1 13-5 18-11 16ZM8 20 18 7"/>',
-  fruit: '<path d="M12 7C6 4 3 8 5 15c2 6 6 6 7 5 1 1 5 1 7-5 2-7-1-11-7-8Zm0 0c0-3 2-5 5-5"/>',
-  snack: '<path d="M5 6h14l2 6-2 7H5l-2-7 2-6ZM8 10h.01M15 12h.01M10 16h.01"/>',
-  sport: '<path d="M4 9v6m3-9v12m3-8v4m4-4v4m3-8v12m3-9v6M4 12h16"/>',
-};
-const categoryArt = {
-  "expense-2": ["bag", "daily"],
-  "expense-4": ["food", "veg"],
-  "expense-5": ["food", "fruit"],
-  "expense-6": ["food", "snack"],
-  "expense-7": ["heart", "sport"],
-};
 const uiPaths = {
   list: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   chart: '<path d="M3 20V4M3 20h18M7 15l4-4 3 2 6-7"/>',
@@ -167,15 +183,40 @@ const uiPaths = {
   chevronRight: '<path d="m9 5 7 7-7 7"/>',
   chevronDown: '<path d="m5 9 7 7 7-7"/>',
   close: '<path d="M5 5 19 19M19 5 5 19"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+  location: '<path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/><circle cx="12" cy="12" r="7"/>',
 };
 function svgIcon(path) {
   return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
 }
-function icon(key) { return svgIcon(iconPaths[key] || iconPaths.other); }
+const expenseIcons = {
+  餐饮: "utensils", 购物: "shopping-bag", 日用: "package", 交通: "bus-front", 蔬菜: "carrot", 水果: "apple",
+  零食: "cookie", 运动: "dumbbell", 娱乐: "gamepad-2", 通讯: "smartphone", 服饰: "shirt", 美容: "paintbrush",
+  住房: "house", 居家: "armchair", 孩子: "baby", 长辈: "accessibility", 社交: "users", 旅行: "plane",
+  烟酒: "cigarette", 数码: "laptop", 汽车: "car-front", 医疗: "cross", 书籍: "book-open", 学习: "graduation-cap",
+  宠物: "paw-print", 礼金: "hand-coins", 礼物: "gift", 办公: "briefcase-business", 其它: "ellipsis",
+};
+const incomeIcons = {
+  工资: "wallet", 兼职: "badge-dollar-sign", 理财: "chart-no-axes-combined", 礼金: "mail", 其它: "circle-dollar-sign",
+  支付宝: "credit-card", 微信: "messages-square",
+};
+const legacyIcons = {
+  food: ["utensils", "餐具"], bag: ["shopping-bag", "购物袋"], home: ["house", "房屋"], bus: ["bus-front", "公交"],
+  gift: ["gift", "礼盒"], heart: ["heart", "爱心"], book: ["book-open", "书本"], briefcase: ["briefcase-business", "公文包"],
+  medical: ["cross", "医疗"], pet: ["paw-print", "爪印"], car: ["car-front", "汽车"], other: ["ellipsis", "更多"],
+};
+function categoryGraphic(category) {
+  const defaults = category?.type === INCOME ? incomeIcons : expenseIcons;
+  if (category?.isBuiltin && category.iconKey === iconFor(category.name) && Object.hasOwn(defaults, category.name)) {
+    return defaults[category.name];
+  }
+  return legacyIcons[category?.iconKey]?.[0] || "ellipsis";
+}
 function categoryIcon(category) {
-  const art = categoryArt[category?.id];
-  return icon(art && category.iconKey === art[0] ? art[1] : category?.iconKey);
+  const graphic = categoryGraphic(category);
+  return svgIcon(`<g class="category-fill" stroke="none">${categoryIconFills[graphic]}</g>${categoryIconPaths[graphic]}`);
 }
 function uiIcon(key) { return svgIcon(uiPaths[key]); }
 function seg(items, value, action) {
@@ -197,47 +238,85 @@ function empty(title, body, action, label) {
 function home() {
   const rows = entriesForMonth(state.data.entries, state.month),
     t = totals(rows);
-  return `${periodPicker(state.month)}${hero("本月结余", t)}<div class="row"><h2 class="heading">本月明细</h2><span class="micro">${rows.length} 笔</span></div>${rows.length ? entryRows(rows) : empty(state.data.entries.length ? "这个月暂无记录" : "还没有记录，记下第一笔吧", "收支会自动汇总在这里。", "new-entry", "记第一笔")}`;
+  const saved = state.savedEntry?.page === "home" ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
+  return `<h1 class="visually-hidden">明细</h1><section class="ledger-month" aria-label="月度账本"><div class="ledger-period">${periodPicker(state.month)}${amountVisibilityButton()}</div>
+    <div class="ledger-summary"><div class="ledger-balance"><span>本月结余</span><strong>${formatYen(t.balance)}</strong></div>
+    <div><span>收入</span><strong class="income">${formatYen(t.income)}</strong></div>
+    <div><span>支出</span><strong class="expense">${formatYen(t.expense)}</strong></div></div></section>
+    <section class="ledger-rows" aria-label="本月明细"><div class="row ledger-heading"><h2 class="heading">流水</h2><span class="ledger-count">${saved}<span class="micro">${rows.length} 笔</span><button class="ledger-search-button" data-action="open-search" aria-label="搜索全部流水">${uiIcon("search")}</button></span></div>
+    ${rows.length ? entryRows(rows) : empty(state.data.entryCount ? "这个月暂无记录" : "还没有记录", "从第一笔收入或支出开始。", "new-entry", "记第一笔")}</section>`;
+}
+function searchPage() {
+  const rows = state.searchRows;
+  return `<form id="ledgerSearch" class="ledger-search-form"><input class="field" name="query" type="search" aria-label="流水关键词" maxlength="120" placeholder="备注、店名、菜品等" value="${E(state.searchText)}" required><button class="primary" type="submit">搜索</button></form>` +
+    (state.searchText ? `<p class="micro" role="status">找到 ${rows.length} 笔</p>${entryRows(rows.slice(0, state.searchLimit))}
+      ${rows.length > state.searchLimit ? '<button class="outline" data-action="search-more">加载更多</button>' : ""}`
+      : '<p class="micro">搜索所有年份。多个关键词用空格隔开。</p>');
 }
 function detail() {
-  const e = state.data.entries.find((x) => x.id === state.detailId);
+  const e = state.detailEntry;
   if (!e)
     return empty("记录已不存在", "返回明细重新查看。", "go-home", "返回明细");
-  return `<div class="card" style="text-align:center"><div class="eyebrow">${typeName(e.type)}</div><div class="hero-value ${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${formatYen(e.amountMinor)}</div><span class="chip">${E(cName(e.categoryId))}</span></div><div class="card"><div class="metric"><span>分类</span><strong>${E(cName(e.categoryId))}</strong></div><div class="metric"><span>日期</span><strong>${E(e.businessDate)}</strong></div><div class="metric"><span>备注</span><strong style="white-space:pre-wrap;overflow-wrap:anywhere">${E(e.note || "无")}</strong></div><div class="metric"><span>创建</span><strong>${E(new Date(e.createdAt).toLocaleString("zh-CN"))}</strong></div></div><button class="primary" data-action="edit-entry">编辑记录</button><button class="outline danger" data-action="ask-delete-entry">删除记录</button>`;
+  const place = e.location && [e.location.city, e.location.district].filter(Boolean).join(" · ");
+  const location = e.location ? metricText("入账定位", `${place ? place + "\n" : ""}${e.location.latitude.toFixed(5)}, ${e.location.longitude.toFixed(5)} · 约 ${Math.round(e.location.accuracy)} 米`) : "";
+  const source = e.sourceText ? metricText("记账原话", e.sourceText) : "";
+  const clues = e.clues?.length ? metricText("检索线索", e.clues.map(clue => `${clue.type}：${clue.value}`).join("\n")) : "";
+  return `<div class="card" style="text-align:center"><div class="eyebrow">${typeName(e.type)}</div><div class="hero-value ${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${formatYen(e.amountMinor)}</div><span class="chip">${E(cName(e.categoryId))}</span></div><div class="card"><div class="metric"><span>分类</span><strong>${E(cName(e.categoryId))}</strong></div><div class="metric"><span>日期</span><strong>${E(e.businessDate)}</strong></div>${metricText("备注", e.note || "无")}${location}${source}${clues}<div class="metric"><span>创建</span><strong>${E(new Date(e.createdAt).toLocaleString("zh-CN"))}</strong></div></div><button class="primary" data-action="edit-entry">编辑记录</button><button class="outline danger" data-action="ask-delete-entry">删除记录</button>`;
+}
+function metricText(label, value) {
+  return `<div class="metric"><span>${label}</span><strong class="detail-text">${E(value)}</strong></div>`;
 }
 function entryPage() {
   const d = state.entry;
   const cats = activeCategories(d.type, true).filter((c) => !c.hidden || c.id === d.categoryId);
-  const shown = state.showAllCats ? cats : cats.slice(0, 8);
-  const categories = shown.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
-  const keys = ["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "日期"].map((k) => k === "日期" ? `<button class="op key-date" data-action="pick-date" aria-label="选择记账日期">${uiIcon("calendar")}<span>日期</span></button>` : `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}" aria-label="${k === "⌫" ? "退格" : k}">${k}</button>`).join("");
-  const categoryActions = `${cats.length > 8 ? `<button class="plain" data-action="toggle-cats">${state.showAllCats ? "收起" : "全部分类"}</button>` : ""}<button class="plain" data-action="category-manage">管理</button>`;
-  return `<div class="entry-layout"><div class="entry-fields">
+  const categories = cats.map((c) => `<button class="cat ${c.id === d.categoryId ? "on" : ""}" data-action="entry-category" data-id="${E(c.id)}" aria-pressed="${c.id === d.categoryId}"><span class="ico category-icon">${categoryIcon(c)}</span><span>${E(c.name)}</span>${c.id === d.categoryId ? `<span class="cat-check">${uiIcon("check")}</span>` : ""}</button>`).join("");
+  return `<div class="entry-layout">
     ${seg([[EXPENSE, "支出"], [INCOME, "收入"]], d.type, "entry-type")}
-    <div class="row category-heading"><h2 class="heading">选择分类</h2><div class="category-actions">${categoryActions}</div></div>
-    <div class="gridcats">${categories}</div>
-    <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div><button class="entry-date" data-action="pick-date" aria-label="选择记账日期，当前${E(fullDate(d.date))}">${uiIcon("calendar")}<span>${E(d.date)} · ${E(fullDate(d.date).split("· ")[1])}</span>${d.date !== localToday() ? '<span class="backdate">补记</span>' : ""}${uiIcon("chevronRight")}</button></div>
-    <textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
-  </div><div class="entry-dock"><div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></div></div>`;
+    <div class="row category-heading"><h2 class="heading">选择分类</h2><button class="plain" data-action="category-manage">管理分类</button></div>
+    <section class="entry-fields" aria-label="记账分类"><div class="gridcats">${categories}</div></section>
+    ${d.categoryId ? entryDock(d) : ""}</div>`;
+}
+function entryDock(d) {
+  const dateLabel = d.date === localToday() ? "今天" : dateText(d.date);
+  const keys = ["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "日期"].map((k) => k === "日期" ? `<button class="op key-date" data-action="pick-date" aria-label="选择记账日期，当前${E(fullDate(d.date))}">${uiIcon("calendar")}<span>${dateLabel}</span></button>` : `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}" aria-label="${k === "⌫" ? "退格" : k}">${k}</button>`).join("");
+  return `<section class="entry-dock ${state.entryDockEntering ? "entry-dock-enter" : ""}" aria-label="记账输入">
+    <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div></div>
+    <div class="entry-location"><textarea id="entryNote" class="entry-note" rows="${Math.min(4, d.note.split("\n").length)}" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
+    <button class="plain place-picker-icon" data-action="entry-location" aria-label="选择地点" aria-pressed="${Boolean(d.location)}">${uiIcon("location")}</button></div>
+    <div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></section>`;
 }
 function categoryRanks(entries, type, click = true) {
-  const ranked = categoryTotals(entries, state.data.categories, type),
-    total = totals(entries)[type === INCOME ? "income" : "expense"];
+  const ranked = categoryTotals(entries, state.data.categories, type);
   if (!ranked.length)
     return empty(`暂无${typeName(type)}分类数据`, "这个周期没有可统计的记录。");
-  return `<div class="card">${ranked.map((r) => `<button class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span>${categoryIcon(r.category)}　${E(r.category.name)}</span><strong>${formatYen(r.amountMinor)}</strong></div><div class="row micro"><span>${r.percent.toFixed(1)}%</span><span>${total ? `${money(r.amountMinor)} / ${money(total)}` : ""}</span></div><div class="bar"><i style="width:${r.percent}%"></i></div></button>`).join("")}</div>`;
+  return `<div class="card rank-list">${ranked.map((r) => {
+    const tag = click ? "button" : "div";
+    return `<${tag} class="rank" ${click ? `data-action="category-detail" data-id="${E(r.category.id)}"` : ""}><div class="row"><span class="rank-label"><span class="ico category-icon">${categoryIcon(r.category)}</span>${E(r.category.name)}</span><span class="rank-value"><strong>${formatYen(r.amountMinor)}</strong><span class="micro">${r.percent.toFixed(1)}%</span></span></div><div class="bar" aria-hidden="true"><i style="width:${r.percent}%"></i></div></${tag}>`;
+  }).join("")}</div>`;
 }
-function chart(points) {
+function chart(points, barType) {
   if (!points.length || points.every((p) => p.value === 0))
     return empty("暂无趋势数据", "这个周期没有可统计的记录。");
   const max = Math.max(1, ...points.map((p) => p.value));
-  const w = 320,
-    h = 130,
-    coords = points.map(
-      (p, i) =>
-        `${points.length === 1 ? w / 2 : (i / (points.length - 1)) * w},${h - (p.value / max) * 105}`,
-    );
-  return `<svg class="trend" viewBox="0 0 320 150" role="img" aria-label="趋势图"><line x1="0" y1="130" x2="320" y2="130"/><line x1="0" y1="68" x2="320" y2="68"/><polyline points="${coords.join(" ")}"/>${points.map((p, i) => `<circle cx="${points.length === 1 ? w / 2 : (i / (points.length - 1)) * w}" cy="${h - (p.value / max) * 105}" r="${i === state.trendPoint ? 5 : 3}" data-action="trend-point" data-index="${i}"><title>${E(p.key)} ${money(p.value)} 元</title></circle>`).join("")}</svg><div class="chart-labels"><span>${E(points[0].key)}</span><span>${E(points.at(-1).key)}</span></div>${state.trendPoint !== null && points[state.trendPoint] ? `<p class="micro">${E(points[state.trendPoint].key)} · ${formatYen(points[state.trendPoint].value)}</p>` : ""}<details><summary class="plain">查看图表数据</summary>${points.map((p) => `<div class="metric micro"><span>${E(p.key)}</span><strong>${formatYen(p.value)}</strong></div>`).join("")}</details>`;
+  const w = 320, h = 130;
+  const bars = Boolean(barType), slot = w / points.length, barWidth = Math.min(18, slot * .55);
+  const positions = points.map((p, i) => ({
+    x: bars ? (i + .5) * slot : points.length === 1 ? w / 2 : (i / (points.length - 1)) * w,
+    y: h - (p.value / max) * 105,
+  }));
+  const marks = positions.map(({ x, y }, i) => {
+    const p = points[i];
+    const active = i === state.trendPoint;
+    const attrs = `data-action="trend-point" data-index="${i}"`;
+    const title = `<title>${E(p.key)} ${formatYen(p.value)}</title>`;
+    if (bars) {
+      if (!p.value) return "";
+      return `<g class="trend-bar ${active ? "selected" : ""}" ${attrs}>${title}<rect x="${i * slot}" y="0" width="${slot}" height="${h}" fill="transparent"/><rect class="trend-column" x="${x - barWidth / 2}" y="${Math.min(y, h - 1)}" width="${barWidth}" height="${Math.max(1, h - y)}" rx="2"/></g>`;
+    }
+    return `<circle cx="${x}" cy="${y}" r="${active ? 5 : 3}" ${attrs}>${title}</circle>`;
+  }).join("");
+  const line = bars ? "" : `<polyline points="${positions.map(({ x, y }) => `${x},${y}`).join(" ")}"/>`;
+  return `<svg class="trend ${barType === EXPENSE ? "trend-expense" : ""}" viewBox="0 0 320 150" role="img" aria-label="趋势图"><line x1="0" y1="130" x2="320" y2="130"/><line x1="0" y1="68" x2="320" y2="68"/>${line}${marks}</svg><div class="chart-labels"><span>${E(points[0].key)}</span><span>${E(points.at(-1).key)}</span></div>${state.trendPoint !== null && points[state.trendPoint] ? `<p class="micro">${E(points[state.trendPoint].key)} · ${formatYen(points[state.trendPoint].value)}</p>` : ""}<details><summary class="plain">查看图表数据</summary>${points.map((p) => `<div class="metric micro"><span>${E(p.key)}</span><strong>${formatYen(p.value)}</strong></div>`).join("")}</details>`;
 }
 function stats() {
   const b = periodBounds(state.statsPeriod, state.statsAnchor),
@@ -246,22 +325,12 @@ function stats() {
     value = totals(rows)[type === INCOME ? "income" : "expense"],
     points = trend(rows, b, type, state.statsPeriod),
     days = dayCount(b);
-  return `${seg(
-    [
-      [EXPENSE, "支出"],
-      [INCOME, "收入"],
-    ],
-    type,
-    "stats-type",
-  )}${seg(
-    [
-      ["week", "周"],
-      ["month", "月"],
-      ["year", "年"],
-    ],
-    state.statsPeriod,
-    "stats-period",
-  )}<div class="period"><button data-action="stats-shift" data-delta="-1">‹</button><strong>${E(b.label)}</strong><button data-action="stats-shift" data-delta="1">›</button></div><div class="card hero"><div class="eyebrow">${typeName(type)}总额</div><div class="hero-value">${formatYen(value)}</div><span class="caption">日均 ${formatYen(days ? Math.round(value / days) : 0)} · ${days} 天</span></div><h2 class="heading">${typeName(type)}趋势</h2><div class="card">${value ? chart(points) : empty(`这个周期暂无${typeName(type)}`, "新增记录后显示趋势。")}</div><h2 class="heading">分类排行</h2>${categoryRanks(rows, type)}`;
+  const label = state.statsPeriod === "week" ? `${dateText(b.start)} – ${dateText(b.end)}` :
+    state.statsPeriod === "month" ? yearMonth(b.start.slice(0, 7)) : b.label;
+  return `<div class="stats-toolbar"><div class="stats-range"><button data-action="stats-shift" data-delta="-1" aria-label="上一周期" ${b.start <= "1900-01-01" ? "disabled" : ""}>${uiIcon("chevronLeft")}</button><strong title="${E(b.start + " 至 " + b.end)}">${E(label)}</strong><button data-action="stats-shift" data-delta="1" aria-label="下一周期" ${b.fullEnd >= localToday() ? "disabled" : ""}>${uiIcon("chevronRight")}</button></div><label class="stats-period-select"><span class="visually-hidden">统计周期</span><select id="statsPeriod" aria-label="统计周期">${[["week", "按周"], ["month", "按月"], ["year", "按年"]].map(([period, text]) => `<option value="${period}" ${state.statsPeriod === period ? "selected" : ""}>${text}</option>`).join("")}</select></label></div>
+    <section class="card stats-chart-card" aria-label="${typeName(type)}趋势"><div class="stats-topline"><span class="eyebrow">${typeName(type)}趋势</span>${seg([[EXPENSE, "支出"], [INCOME, "收入"]], type, "stats-type")}</div>
+    <div class="stats-value">${formatYen(value)}</div><p class="caption">日均 ${formatYen(days ? Math.round(value / days) : 0)} · ${days} 天</p>
+    ${value ? chart(points, type) : empty(`这个周期暂无${typeName(type)}`, "新增记录后显示趋势。")}</section><h2 class="heading">分类排行</h2><div class="${type === EXPENSE ? "expense-ranks" : ""}">${categoryRanks(rows, type)}</div>`;
 }
 function categoryDetail() {
   if (!state.filter) return "";
@@ -296,14 +365,15 @@ function toolsPage() {
   return `<button class="menu" data-action="bills"><span class="ico">▤</span><span><strong>账单</strong><small class="micro" style="display:block">${yearMonth(state.month)} · 结余 ${formatYen(t.balance)}</small></span><span class="chev">›</span></button><button class="menu" data-action="budget"><span class="ico">◌</span><span><strong>月总预算</strong><small class="micro" style="display:block">${budgetInfo(state.month).budget ? "查看已用与剩余" : "设置本月预算"}</small></span><span class="chev">›</span></button><button class="menu" data-action="assets"><span class="ico">◇</span><span><strong>资产概览</strong><small class="micro" style="display:block">${a ? `净资产 ${formatYen(a.assetMinor - a.liabilityMinor)}` : "填写资产与负债"}</small></span><span class="chev">›</span></button>`;
 }
 function bills() {
-  const entries = state.data.entries,
-    years = [...new Set(entries.map((e) => yearOf(e.businessDate)))].sort(
+  const summaries = state.data.monthlyStats,
+    byMonth = new Map(summaries.map(summary => [summary.month, summary])),
+    years = [...new Set(summaries.map(summary => yearOf(summary.month)))].sort(
       (a, b) => b - a,
     ),
     isMonth = state.billMode === "month",
     selected = state.billYear,
-    yearRows = entries.filter((e) => yearOf(e.businessDate) === selected),
-    t = totals(isMonth ? yearRows : entries),
+    yearRows = summaries.filter(summary => yearOf(summary.month) === selected),
+    t = summarizeRollups(isMonth ? yearRows : summaries),
     months = Array.from(
       { length: 12 },
       (_, i) => `${selected}-${String(12 - i).padStart(2, "0")}`,
@@ -311,7 +381,7 @@ function bills() {
       (m) =>
         state.showAllMonths ||
         (m <= currentMonth() &&
-          (entriesForMonth(entries, m).length ||
+          (byMonth.has(m) ||
             state.data.budgets.some((b) => b.yearMonth === m))),
     );
   return `${seg(
@@ -326,11 +396,11 @@ function bills() {
     : years
   )
     .map((key) => {
-      const data = isMonth
-          ? entriesForMonth(entries, key)
-          : entries.filter((e) => yearOf(e.businessDate) === key),
-        v = totals(data);
-      return `<tr data-action="open-report" data-value="${key}"><td>${isMonth ? `${monthOf(key)}月${key === currentMonth() ? " · 至今" : ""}` : `${key}年`}</td><td>${format(v.income)}</td><td>${format(v.expense)}</td><td>${format(v.balance)}</td></tr>`;
+      const v = isMonth
+        ? byMonth.get(key) || { income: 0, expense: 0 }
+        : summarizeRollups(summaries.filter(summary => yearOf(summary.month) === key));
+      const balance = v.income - v.expense;
+      return `<tr data-action="open-report" data-value="${key}"><td>${isMonth ? `${monthOf(key)}月${key === currentMonth() ? " · 至今" : ""}` : `${key}年`}</td><td>${format(v.income)}</td><td>${format(v.expense)}</td><td>${format(balance)}</td></tr>`;
     })
     .join(
       "",
@@ -346,15 +416,15 @@ function assetsPage() {
   return `<div class="card hero"><div class="eyebrow">净资产</div><div class="hero-value">${a ? formatYen(a.assetMinor - a.liabilityMinor) : "尚未设置"}</div><div class="summary-grid"><div><span class="eyebrow">资产</span><strong>${a ? formatYen(a.assetMinor) : "—"}</strong></div><div><span class="eyebrow">负债</span><strong>${a ? formatYen(a.liabilityMinor) : "—"}</strong></div></div></div><div class="tip">资产为手动维护，收支记录不会自动改变资产。</div><div class="asset-inputs"><div><label for="assetAmount">资产总额</label><input id="assetAmount" class="field" inputmode="decimal" value="${a ? money(a.assetMinor).replaceAll(",", "") : ""}" placeholder="0.00"></div><div><label for="liabilityAmount">负债总额</label><input id="liabilityAmount" class="field" inputmode="decimal" value="${a ? money(a.liabilityMinor).replaceAll(",", "") : ""}" placeholder="0.00"></div></div><p id="assetError" class="error"></p><button class="primary" data-action="save-assets">保存资产概览</button>${a ? `<p class="micro">更新于 ${E(new Date(a.updatedAt).toLocaleString("zh-CN"))}</p>` : ""}`;
 }
 function mine() {
-  const a = achievements(state.data.entries);
-  return `<div class="card"><div class="row"><span class="ico" style="height:52px;width:52px;font-size:1.533rem">账</span><div style="flex:1"><strong>认真记录每一天</strong><div class="micro">简账 · 本地账本</div></div></div></div><div class="card achievement"><div><strong>${a.streak}</strong><span>连续记账</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div></div><div class="list"><button class="menu" data-action="categories"><span class="ico">◇</span><span>分类管理</span><span class="chev">›</span></button><button class="menu" data-action="settings"><span class="ico">⚙</span><span>设置与数据</span><span class="chev">›</span></button><button class="menu" data-action="help"><span class="ico">?</span><span>使用说明</span><span class="chev">›</span></button><button class="menu" data-action="about"><span class="ico">♡</span><span>关于简账</span><span class="chev">›</span></button></div>`;
+  const a = rollupAchievements(state.data.monthlyStats);
+  return `<div class="card"><div class="row"><span class="ico" style="height:52px;width:52px;font-size:1.533rem">账</span><div style="flex:1"><strong>认真记录每一天</strong><div class="micro">爱记账 · 本地账本</div></div></div></div><div class="card achievement"><div><strong>${a.streak}</strong><span>连续记账</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div></div><div class="list"><button class="menu" data-action="categories"><span class="ico">◇</span><span>分类管理</span><span class="chev">›</span></button><button class="menu" data-action="settings"><span class="ico">⚙</span><span>设置与数据</span><span class="chev">›</span></button><button class="menu" data-action="help"><span class="ico">?</span><span>使用说明</span><span class="chev">›</span></button><button class="menu" data-action="about"><span class="ico">♡</span><span>关于爱记账</span><span class="chev">›</span></button></div>`;
 }
 function categoryManage() {
   const list = activeCategories(state.catType, true),
     active = list.filter((c) => !c.hidden),
     hidden = list.filter((c) => c.hidden);
   const item = (c) =>
-    `<div class="menu" draggable="true" data-catdrag="${E(c.id)}"><span class="ico">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · 拖动排序</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button><button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button></div>`;
+    `<div class="menu" draggable="${!isDiningCategory(c)}" data-catdrag="${E(c.id)}"><span class="ico category-icon">${categoryIcon(c)}</span><span><strong>${E(c.name)}</strong><small class="micro" style="display:block">${c.isBuiltin ? "内置" : "自建"} · ${isDiningCategory(c) ? "置顶" : "拖动排序"}</small></span><button class="small-button" data-action="edit-category" data-id="${E(c.id)}">编辑</button>${isDiningCategory(c) ? "" : `<button class="small-button" data-action="toggle-category" data-id="${E(c.id)}">${c.hidden ? "恢复" : "隐藏"}</button>`}</div>`;
   return `${seg(
     [
       [EXPENSE, "支出"],
@@ -365,7 +435,13 @@ function categoryManage() {
   )}<button class="primary" data-action="new-category">＋ 新增分类</button><h2 class="heading">使用中的分类</h2><div class="list">${active.map(item).join("")}</div>${hidden.length ? `<h2 class="heading">已隐藏</h2><div class="list">${hidden.map(item).join("")}</div>` : ""}`;
 }
 function settings() {
-  return `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。请定期导出备份；更换地址或浏览器不会自动同步。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
+  const aiSettings = '<div class="list"><button class="menu" data-action="assistant-settings"><span>AI 助手设置</span><span class="chev">›</span></button></div>';
+  const themeOptions = themes.map(([id, label]) => `<label class="theme-option" data-theme-sample="${id}">
+    <input type="radio" name="app-theme" value="${id}" ${id === activeTheme ? "checked" : ""}>
+    <span class="theme-swatch" aria-hidden="true"><span></span><span></span></span><span>${label}</span>
+  </label>`).join("");
+  return `<fieldset class="theme-picker"><legend>外观主题</legend><div class="theme-options">${themeOptions}</div><p id="themeStatus" class="error" role="status"></p></fieldset>` +
+    aiSettings + `<div class="list"><button class="menu" data-action="toggle-hide"><span>默认隐藏金额</span><strong>${state.data.preferences.hideAmountsByDefault ? "已开启" : "已关闭"}</strong></button><button class="menu" data-action="export"><span>导出分月 ZIP 备份</span><span class="chev">›</span></button><button class="menu" data-action="export-json"><span>导出兼容 JSON 备份</span><span class="chev">›</span></button><button class="menu" data-action="restore"><span>从备份恢复</span><span class="chev">›</span></button></div><div class="tip">浏览器数据保存在当前地址和浏览器中。备份包含账本里的备注、检索线索和已添加的定位，请保管好文件。</div><button class="outline danger" data-action="clear">清空全部数据</button>`;
 }
 
 const palette = [
@@ -397,9 +473,7 @@ function comparison(month, type) {
     const m = shiftMonth(month, i - 5);
     return {
       key: m,
-      value: totals(entriesForMonth(state.data.entries, m))[
-        type === INCOME ? "income" : "expense"
-      ],
+      value: state.data.monthlyStats.find(summary => summary.month === m)?.[type === INCOME ? "income" : "expense"] || 0,
     };
   });
 }
@@ -505,20 +579,32 @@ function report() {
     annual
       ? ""
       : `<h2 class="heading">最近6个月收入对比</h2><div class="card">${bars(comparison(state.reportMonth, INCOME))}</div><h2 class="heading">当前记账成就</h2><div class="card achievement">${(() => {
-          const a = achievements(state.data.entries);
+          const a = rollupAchievements(state.data.monthlyStats);
           return `<div><strong>${a.streak}</strong><span>连续天数</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div>`;
         })()}</div>`
   }<button class="primary" data-action="share">预览并下载报告图片</button>`;
 }
+function assistantEntryHtml() {
+  if (state.page === "assistant") {
+    return '<button class="ai-entry" data-action="assistant-history" aria-label="历史会话">历史</button>' +
+      assistant.sessionButton() + `<button class="ai-entry ai-settings-icon" data-action="assistant-settings" aria-label="AI 助手设置">${uiIcon("settings")}</button>`;
+  }
+  return "";
+}
+function amountVisibilityButton() {
+  const hidden = state.data.preferences.hideAmountsByDefault;
+  return `<button class="top-icon" data-action="toggle-hide" aria-label="${hidden ? "显示金额" : "隐藏金额"}">${uiIcon(hidden ? "eyeOff" : "eye")}</button>`;
+}
 function header() {
+  if (state.page === "home") return "";
   const main = ["home", "stats", "tools", "mine"].includes(state.page),
     titles = {
-      home: "简账",
       stats: "统计",
       tools: "工具",
       mine: "我的",
       entry: state.entry?.id ? "编辑记录" : "记一笔",
       detail: "记录详情",
+      search: "搜索流水",
       categoryDetail: cName(state.filter?.categoryId),
       bills: "账单",
       report: `${yearMonth(state.reportMonth)}账单`,
@@ -527,18 +613,28 @@ function header() {
       assets: "资产概览",
       categories: "分类管理",
       settings: "设置与数据",
+      assistant: "AI 助手",
+      assistantSettings: "AI 助手设置",
+      assistantHistory: "历史会话",
     };
-  return `<header class="top ${state.page === "entry" ? "entry-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${main ? `<button class="top-icon" data-action="toggle-hide" aria-label="${state.data.preferences.hideAmountsByDefault ? "显示金额" : "隐藏金额"}">${uiIcon(state.data.preferences.hideAmountsByDefault ? "eyeOff" : "eye")}</button>` : ""}</header>`;
+  const saved = state.savedEntry?.page === state.page ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
+  return `<header class="top ${state.page === "entry" ? "entry-top" : ""} ${state.page === "assistant" ? "assistant-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "爱记账")}</h1>${saved}${main ? amountVisibilityButton() : ""}${assistantEntryHtml()}</header>`;
 }
 function navbar() {
   if (!["home", "stats", "tools", "mine"].includes(state.page)) return "";
   const items = [
     ["home", "明细", "list"],
     ["stats", "统计", "chart"],
+    ["entry", "记一笔"],
     ["tools", "工具", "grid"],
     ["mine", "我的", "person"],
   ];
-  return `<button class="fab" data-action="new-entry"><span aria-hidden="true">＋</span>记一笔</button><nav class="bottom" aria-label="主导航">${items.map(([p, label, glyph]) => `<button data-action="nav" data-value="${p}" class="${state.page === p ? "active" : ""}" aria-current="${state.page === p ? "page" : "false"}"><span class="nav-icon">${uiIcon(glyph)}</span><span>${label}</span></button>`).join("")}</nav>`;
+  const ai = ["home", "stats"].includes(state.page)
+    ? '<button class="fab" data-action="open-assistant" aria-label="打开 AI 助手"><span aria-hidden="true">✦</span>AI</button>'
+    : "";
+  return `${ai}<nav class="bottom" aria-label="主导航">${items.map(([p, label, glyph]) =>
+    p === "entry" ? '<button class="nav-entry" data-action="new-entry"><span class="nav-plus" aria-hidden="true">＋</span><span>记一笔</span></button>' :
+    `<button data-action="nav" data-value="${p}" class="${state.page === p ? "active" : ""}" aria-current="${state.page === p ? "page" : "false"}"><span class="nav-icon">${uiIcon(glyph)}</span><span>${label}</span></button>`).join("")}</nav>`;
 }
 function monthModal(m) {
   const year = Number(m.pending.slice(0, 4)), selectedMonth = Number(m.pending.slice(5, 7));
@@ -571,14 +667,28 @@ function modalHtml() {
     case "pickDate":
       body = dateModal(m);
       break;
+    case "bookingPlace": {
+      const point = m.location;
+      const coordinates = point ? point.latitude + "," + point.longitude : "";
+      body = '<h2>选择地点</h2>' + (point ? '<a class="outline place-map-link" target="_blank" rel="noopener noreferrer" href="https://www.openstreetmap.org/?mlat=' +
+        point.latitude + '&amp;mlon=' + point.longitude + '#map=17/' + point.latitude + '/' + point.longitude + '">在地图中查看当前位置</a>' +
+        '<button class="outline" data-action="use-booking-place" data-value="">只附入账坐标</button>' :
+        '<p class="micro" role="status">' + (m.loading ? "正在定位…" : "暂未获取当前位置，可以直接填写地点。") + '</p>') +
+        (coordinates ? m.names.map(name => '<button class="outline" data-action="use-booking-place" data-value="' + E(name) + '">' + E(name) + '</button>').join("") : "") +
+        '<label for="bookingPlaceName">自己填写地点</label><input class="field" id="bookingPlaceName" maxlength="120" value="' + E(m.name || "") +
+        '" placeholder="例如王府井"><button class="primary" data-action="use-booking-place" data-value="custom">使用填写的地点</button>' +
+        (m.selected ? '<button class="plain" data-action="remove-booking-place">移除定位</button>' : "") +
+        '<button class="plain" data-action="close-modal">关闭</button>';
+      break;
+    }
     case "category":
-      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${k}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !cById(m.id)?.isBuiltin && !state.data.entries.some((e) => e.categoryId === m.id) ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
+      body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" ${isDiningCategory(cById(m.id)) ? "readonly" : ""} value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${legacyIcons[k][1]}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !isDiningCategory(cById(m.id)) && !cById(m.id)?.isBuiltin && !m.inUse ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
       break;
     case "restore":
-      body = `<h2>恢复备份</h2><p>这会替换当前全部数据。请先导出当前账本备份，并确认文件已经保留在电脑上。</p><button class="outline" data-action="export">导出当前备份</button><label><input type="checkbox" id="backupConfirmed"> 我已确认备份文件已保留</label><label for="restoreFile">选择 JSON 备份</label><input id="restoreFile" class="field" type="file" accept=".json,application/json"><p id="restoreError" class="error"></p><button class="primary" data-action="preview-restore">校验并预览</button><button class="plain" data-action="close-modal">取消</button>`;
+      body = `<h2>恢复备份</h2><p>这会替换当前账本。请先导出当前账本备份，并确认文件已经保留在电脑上。</p><button class="outline" data-action="export">导出当前备份</button><label><input type="checkbox" id="backupConfirmed"> 我已确认备份文件已保留</label><label for="restoreFile">选择 ZIP 或 JSON 备份</label><input id="restoreFile" class="field" type="file" accept=".zip,.json,application/zip,application/json"><p id="restoreError" class="error" role="status">${E(m.status || "")}</p><button class="primary" data-action="preview-restore" ${m.busy ? "disabled" : ""}>校验并预览</button><button class="plain" data-action="close-modal">取消</button>`;
       break;
     case "restorePreview":
-      body = `<h2>恢复预览</h2><p>记录 ${m.data.entries.length} 笔 · 分类 ${m.data.categories.length} 个 · 预算 ${m.data.budgets.length} 个月</p><p>日期范围：${m.data.entries.length ? `${[...m.data.entries].sort((a, b) => a.businessDate.localeCompare(b.businessDate))[0].businessDate} — ${[...m.data.entries].sort((a, b) => b.businessDate.localeCompare(a.businessDate))[0].businessDate}` : "无记录"}</p><p class="danger">确认后将替换当前全部数据。</p><button class="primary" data-action="confirm-restore">确认替换</button><button class="outline" data-action="close-modal">取消</button>`;
+      body = `<h2>恢复预览</h2><p>记录 ${m.data.entries.length} 笔 · 分类 ${m.data.categories.length} 个 · 预算 ${m.data.budgets.length} 个月</p><p>日期范围：${m.range}</p><p class="danger">确认后将替换当前账本。</p><button class="primary" data-action="confirm-restore" ${m.busy ? "disabled" : ""}>${m.busy ? "正在恢复…" : "确认替换"}</button><button class="outline" data-action="close-modal" ${m.busy ? "disabled" : ""}>取消</button>`;
       break;
     case "share":
       body = `<h2>报告图片预览</h2><label><input id="shareAmounts" type="checkbox" ${state.shareOptions.amounts ? "checked" : ""}> 图片包含金额</label><label><input id="shareRanking" type="checkbox" ${state.shareOptions.ranking ? "checked" : ""}> 包含单笔排行</label><label><input id="shareAchievements" type="checkbox" ${state.shareOptions.achievements ? "checked" : ""}> 包含记账成就</label><p class="micro">默认只含汇总图表，不含备注、资产或姓名。请确认图片中的金额后再下载。</p><button class="outline" data-action="refresh-share">更新预览</button><img class="share-preview" alt="报告图片预览" src="${state.shareUrl || ""}"><button class="primary" data-action="download-share">下载 PNG 图片</button><button class="plain" data-action="close-modal">关闭</button>`;
@@ -587,25 +697,33 @@ function modalHtml() {
       body = `<h2>使用说明</h2><p>点击“记一笔”选择收支分类，用金额键盘输入数字或加减表达式。选择过去日期可补记。点击明细可编辑或删除，删除后 5 秒内可撤销。</p><p>工具中可查看账单、设置月预算和手动维护资产。数据仅保存在当前浏览器，建议定期导出备份。</p><button class="primary" data-action="close-modal">知道了</button>`;
       break;
     case "about":
-      body = `<h2>关于简账</h2><p>简账 Web 功能验收版 · 数据仅保存在本机浏览器。</p><button class="primary" data-action="close-modal">关闭</button>`;
+      body = `<h2>关于爱记账</h2><p>爱记账 Web 功能验收版 · 数据仅保存在本机浏览器。</p><button class="primary" data-action="close-modal">关闭</button>`;
       break;
     case "clear":
-      body = `<h2>清空全部数据</h2><p class="danger">流水、分类调整、预算和资产都将删除。请先导出备份。</p><button class="outline" data-action="export">导出当前备份</button><label><input id="clearBacked" type="checkbox"> 我已保留备份，仍要清空</label><label for="clearPhrase">输入“清空账本”再次确认</label><input id="clearPhrase" class="field" placeholder="清空账本"><p id="clearError" class="error"></p><button class="primary" data-action="confirm-clear">确认清空</button><button class="outline" data-action="close-modal">取消</button>`;
+      body = `<h2>清空全部数据</h2><p class="danger">流水、分类调整、预算、资产和 AI 历史会话都将删除。请先导出备份。</p><button class="outline" data-action="export">导出当前备份</button><label><input id="clearBacked" type="checkbox"> 我已保留备份，仍要清空</label><label for="clearPhrase">输入“清空账本”再次确认</label><input id="clearPhrase" class="field" placeholder="清空账本"><p id="clearError" class="error"></p><button class="primary" data-action="confirm-clear">确认清空</button><button class="outline" data-action="close-modal">取消</button>`;
       break;
   }
   return `<div class="modalback ${m.entering ? "modal-enter" : ""}"><button class="modal-scrim" data-action="close-modal" aria-label="关闭弹层"></button><div class="modal ${m.kind === "pickDate" || m.kind === "pickMonth" ? "calendar-modal" : ""}" role="dialog" aria-modal="true" aria-label="${m.kind === "pickDate" ? "选择日期" : m.kind === "pickMonth" ? "选择月份" : "操作弹层"}"><span class="modal-handle" aria-hidden="true"></span>${body}</div></div>`;
 }
-function render() {
+function render(followChat = true) {
   if (!state.data) return;
   const oldContent = $(".content"), samePage = phone.dataset.page === state.page;
+  const restoreControls = state.modal?.kind === "restore" && !state.modal.entering
+    ? [$("#backupConfirmed"), $("#restoreFile")] : [];
   const oldScroll = oldContent?.scrollTop || 0;
   const oldEntryScroll = $(".entry-fields")?.scrollTop || 0;
+  const oldThread = $(".assistant-thread");
+  const oldChatScroll = oldThread?.scrollTop || 0;
+  const focusedChat = document.activeElement?.matches("#assistant-chat textarea")
+    ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  const keepChatBottom = !oldThread || (followChat && oldThread.scrollHeight - oldThread.clientHeight - oldChatScroll < 72);
   const oldFocus = state.modal && document.activeElement?.closest(".modal")
     ? { id: document.activeElement.id, action: document.activeElement.dataset.action, value: document.activeElement.dataset.value }
     : null;
   const pages = {
     home,
     detail,
+    search: searchPage,
     entry: entryPage,
     stats,
     categoryDetail,
@@ -618,24 +736,43 @@ function render() {
     mine,
     categories: categoryManage,
     settings,
+    assistant: assistant.page,
+    assistantSettings: assistant.configPage,
+    assistantHistory: assistant.historyPage,
   };
   const main = ["home", "stats", "tools", "mine"].includes(state.page);
   phone.innerHTML = `<div class="phone-screen">` +
     header() +
-    `<main class="content ${main ? "" : "secondary"} ${state.page === "entry" ? "entry-content" : ""} ${state.motion}">${pages[state.page]?.() || ""}</main>` +
+    `<main class="content ${main ? "" : "secondary"} ${state.page === "entry" ? "entry-content" : ""} ${state.page === "assistant" ? "assistant-content" : ""} ${state.motion}">${pages[state.page]?.() || ""}</main>` +
     navbar() +
     modalHtml() +
-    (state.toast
-      ? `<div class="toast" role="status">${E(state.toast)}${state.undo ? '<button class="plain" style="color:#fff" data-action="undo-delete">撤销</button>' : ""}</div>`
+    (state.toast?.page === state.page
+      ? `<div class="toast ${main ? "toast-above-nav" : ""}" role="status">${E(state.toast.message)}${state.undo ? '<button class="plain" style="color:#fff" data-action="undo-delete">撤销</button>' : ""}</div>`
       : "") +
     `</div>`;
   phone.dataset.page = state.page;
+  for (const control of restoreControls) {
+    if (control) document.getElementById(control.id)?.replaceWith(control);
+  }
   $(".content").scrollTop = samePage ? oldScroll : state.scrollByPage[state.page] || 0;
-  if (samePage && state.page === "entry") $(".entry-fields").scrollTop = oldEntryScroll;
+  if (state.page === "entry") $(".entry-fields").scrollTop = samePage ? oldEntryScroll : 0;
+  const thread = $(".assistant-thread");
+  if (thread) {
+    thread.scrollTop = keepChatBottom ? thread.scrollHeight : oldChatScroll;
+    updateChatJump(thread);
+    if (focusedChat) {
+      const composer = $("#assistant-chat textarea");
+      if (!composer.disabled) {
+        composer.focus({ preventScroll: true });
+        composer.setSelectionRange(...focusedChat);
+      }
+    }
+  }
   if (state.modal) {
     phone.querySelectorAll(".top, .content, .fab, .bottom").forEach((el) => el.inert = true);
   }
   state.motion = "";
+  state.entryDockEntering = false;
   if (state.modal?.entering) {
     state.modal.entering = false;
     $(".modal .icon-button, .modal input, .modal button")?.focus({ preventScroll: true });
@@ -644,22 +781,56 @@ function render() {
     same?.focus({ preventScroll: true });
   }
 }
-function navigate(page, motion = null) {
+let ledgerScope, navigationSequence = 0, searchSequence = 0;
+function scopeFor(page) {
+  if (["home", "tools", "budget"].includes(page)) return periodBounds("month", `${state.month}-01`);
+  if (page === "stats") return periodBounds(state.statsPeriod, state.statsAnchor);
+  if (page === "categoryDetail") return state.filter.bounds;
+  if (page === "report") {
+    return { start: `${shiftMonth(state.reportMonth, -1)}-01`, end: periodBounds("month", `${state.reportMonth}-01`).end };
+  }
+  if (page === "annual") return periodBounds("year", `${state.reportYear}-01-01`);
+  if (["mine", "bills", "categories", "settings", "assets", "assistant", "assistantSettings", "assistantHistory", "search"].includes(page)) {
+    return { summaryOnly: true };
+  }
+  return ledgerScope;
+}
+function scopeKey(scope) {
+  return scope?.start ? `${scope.start}/${scope.end}` : scope?.summaryOnly ? "summary" : "all";
+}
+async function navigate(page, motion = null) {
+  const sequence = ++navigationSequence;
+  const scope = scopeFor(page);
+  let data = state.data, rows = state.searchRows;
+  try {
+    if (scopeKey(scope) !== scopeKey(ledgerScope)) {
+      data = scope?.summaryOnly ? { ...data, entries: [] } : await loadLedger(scope);
+    }
+    if (page === "search" && state.searchText) {
+      const terms = cleanTerms(state.searchText.split(/\s+/));
+      rows = terms.length ? await queryEntries({ terms }) : [];
+    }
+  } catch (error) {
+    if (sequence === navigationSequence) toast(`读取账本失败：${error.message}`);
+    return;
+  }
+  if (sequence !== navigationSequence) return;
+  state.data = data;
+  ledgerScope = scope;
+  state.searchRows = rows;
   if ($(".content")) state.scrollByPage[state.page] = $(".content").scrollTop;
   const mainFrom = ["home", "stats", "tools", "mine"].includes(state.page);
   const mainTo = ["home", "stats", "tools", "mine"].includes(page);
-  state.motion = motion ?? (mainFrom && mainTo ? "motion-fade" : "motion-forward");
+  if (state.toast && state.toast.page !== page) {
+    clearTimeout(toastTimer);
+    state.toast = null;
+  }
+  if (state.savedEntry && state.savedEntry.page !== page && state.page !== "entry") state.savedEntry = null;
+  state.motion = motion ?? (mainFrom && mainTo ? "" : "motion-forward");
   state.page = page;
   state.modal = null;
   state.trendPoint = null;
   render();
-}
-function withViewTransition(change) {
-  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    document.startViewTransition(() => change(true));
-  } else {
-    change(false);
-  }
 }
 let entryCoverTransition;
 function entryCover(direction, change) {
@@ -683,75 +854,231 @@ function openEntryCover() {
   entryCover("entry-opening", (nativeTransition) => beginEntry(null, nativeTransition));
 }
 function closeEntryCover() {
-  entryCover("entry-closing", (nativeTransition) => navigate(state.entryOrigin, nativeTransition ? "" : "motion-fade"));
+  entryCover("entry-closing", () => navigate(state.entryOrigin, ""));
 }
 let toastTimer;
 function toast(msg) {
-  state.toast = msg;
+  state.toast = { message: msg, page: state.page };
   render();
   clearTimeout(toastTimer);
   toastTimer = setTimeout(
     () => {
       state.toast = null;
-      render();
+      $(".toast")?.remove();
     },
     state.undo ? 5000 : 3200,
   );
+}
+function showEntrySaved(id, page) {
+  const saved = { id, page };
+  state.savedEntry = saved;
+  setTimeout(() => {
+    if (state.savedEntry !== saved) return;
+    state.savedEntry = null;
+    $(".record-saved")?.classList.remove("record-saved");
+    $(".save-status")?.remove();
+  }, 2200);
+}
+
+function updateChatJump(thread) {
+  const button = $("[data-action='assistant-latest']");
+  if (button) button.hidden = thread.scrollHeight - thread.clientHeight - thread.scrollTop < 72;
 }
 function modal(m) {
   state.modal = { ...m, entering: true, returnFocus: document.activeElement?.dataset.action };
   render();
 }
 function closeModal() {
+  if (state.modal?.kind === "restorePreview" && state.modal.busy) return;
   const action = state.modal?.returnFocus;
   state.modal = null;
   render();
   if (action) $(`[data-action="${action}"]`)?.focus({ preventScroll: true });
 }
 async function reload() {
-  state.data = await loadLedger();
+  const sequence = navigationSequence, scope = scopeFor(state.page);
+  const data = await loadLedger(scope);
+  if (sequence !== navigationSequence) return;
+  state.data = data;
+  ledgerScope = scope;
+  if (state.page === "search" && state.searchText) await searchLedger(state.searchText);
   render();
 }
+let monthRequest = 0, monthGestureBusy = false;
+async function showLedgerMonth(month, anchor = "top") {
+  const request = ++monthRequest, navigation = navigationSequence, openModal = state.modal;
+  const scope = periodBounds("month", `${month}-01`);
+  const data = await loadLedger(scope);
+  if (request !== monthRequest || navigation !== navigationSequence || state.modal !== openModal) return;
+  ledgerScope = scope;
+  state.data = data;
+  state.month = month;
+  state.modal = null;
+  if (anchor === "bottom" && !state.toast) toast(yearMonth(month));
+  else render();
+  const content = $(".content");
+  content.scrollTop = anchor === "bottom" ? content.scrollHeight : 0;
+  if (openModal?.kind === "pickMonth") $('[data-action="pick-month"]')?.focus({ preventScroll: true });
+}
+
+function homeScrollTarget(target) {
+  if (state.page !== "home" || state.modal) return null;
+  const content = $(".content");
+  return content?.contains(target) ? content : null;
+}
+
+function monthEdge(content, delta) {
+  const bottom = content.scrollHeight - content.clientHeight;
+  if (delta > 0 && content.scrollTop >= bottom - 2) return -1;
+  if (delta < 0 && content.scrollTop <= 2) return 1;
+  return 0;
+}
+
+async function followLedgerEdge(direction) {
+  if (!direction || monthGestureBusy || state.page !== "home" || state.modal ||
+      !canShiftMonth(state.month, direction, direction > 0 ? currentMonth() : "9999-12")) return;
+  monthGestureBusy = true;
+  try {
+    await showLedgerMonth(shiftMonth(state.month, direction), direction < 0 ? "top" : "bottom");
+  } catch (error) {
+    if (state.page === "home") toast(`无法读取相邻月份：${error.message}`);
+  } finally {
+    monthGestureBusy = false;
+  }
+}
+
+const edgeTravel = 64;
+let wheelEdge = 0, wheelTravel = 0, wheelAt = -Infinity, wheelLocked = false;
+phone.addEventListener("wheel", event => {
+  const content = homeScrollTarget(event.target);
+  if (!content || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+  const now = performance.now();
+  if (now - wheelAt > 220) {
+    wheelEdge = wheelTravel = 0;
+    wheelLocked = false;
+  }
+  wheelAt = now;
+  if (wheelLocked || monthGestureBusy) return;
+  const direction = monthEdge(content, event.deltaY);
+  const pixels = event.deltaMode === 1 ? event.deltaY * 16 :
+    event.deltaMode === 2 ? event.deltaY * content.clientHeight : event.deltaY;
+  wheelTravel = direction === wheelEdge ? wheelTravel + Math.abs(pixels) : Math.abs(pixels);
+  wheelEdge = direction;
+  if (!direction || wheelTravel < edgeTravel) return;
+  wheelLocked = true;
+  void followLedgerEdge(direction);
+}, { passive: true });
+
+let edgeTouch;
+phone.addEventListener("touchstart", event => {
+  const content = homeScrollTarget(event.target);
+  const touch = event.touches[0];
+  edgeTouch = content && event.touches.length === 1 && !monthGestureBusy
+    ? { content, x: touch.clientX, y: touch.clientY, lastY: touch.clientY, direction: 0, travel: 0 } : null;
+}, { passive: true });
+phone.addEventListener("touchmove", event => {
+  if (!edgeTouch) return;
+  const touch = event.touches[0], gesture = edgeTouch;
+  if (event.touches.length !== 1 || homeScrollTarget(event.target) !== gesture.content ||
+      Math.abs(touch.clientX - gesture.x) > Math.max(12, Math.abs(touch.clientY - gesture.y))) {
+    edgeTouch = null;
+    return;
+  }
+  const delta = gesture.lastY - touch.clientY;
+  if (!delta) return;
+  gesture.lastY = touch.clientY;
+  const direction = monthEdge(gesture.content, delta);
+  gesture.travel = direction === gesture.direction ? gesture.travel + Math.abs(delta) : Math.abs(delta);
+  gesture.direction = direction;
+}, { passive: true });
+phone.addEventListener("touchend", () => {
+  const gesture = edgeTouch;
+  edgeTouch = null;
+  if (gesture?.content === $(".content") && gesture.travel >= edgeTravel) void followLedgerEdge(gesture.direction);
+}, { passive: true });
+phone.addEventListener("touchcancel", () => { edgeTouch = null; }, { passive: true });
+
+async function searchLedger(value) {
+  const text = value.trim();
+  const terms = cleanTerms(text.split(/\s+/));
+  const sequence = navigationSequence;
+  const request = ++searchSequence;
+  const rows = terms.length ? await queryEntries({ terms }) : [];
+  if (state.page !== "search" || sequence !== navigationSequence || request !== searchSequence) return;
+  state.searchText = text;
+  state.searchRows = rows;
+  state.searchLimit = 40;
+}
 function beginEntry(e = null, nativeTransition = false) {
-  const type = e?.type || EXPENSE,
-    preferred = state.lastCategory[type],
-    valid = activeCategories(type).some((c) => c.id === preferred)
-      ? preferred
-      : activeCategories(type)[0]?.id;
   state.entry = {
     id: e?.id || null,
-    type,
-    categoryId: e?.categoryId || valid,
-    initialCategoryId: e?.categoryId || valid,
+    type: e?.type || EXPENSE,
+    categoryId: e?.categoryId || null,
     expr: e ? money(e.amountMinor).replaceAll(",", "") : "",
     date: e?.businessDate || localToday(),
     note: e?.note || "",
+    location: e?.location || null,
+    clues: e?.clues,
     error: "",
   };
   state.entryOrigin = state.page;
-  state.showAllCats = false;
   navigate("entry", nativeTransition ? "" : "motion-entry");
 }
 function draftChanged() {
   const d = state.entry;
   if (d.id) {
-    const e = state.data.entries.find((x) => x.id === d.id);
+    const e = state.detailEntry;
     return (
       !!e &&
       (d.type !== e.type ||
         d.categoryId !== e.categoryId ||
         d.expr !== money(e.amountMinor).replaceAll(",", "") ||
         d.date !== e.businessDate ||
-        d.note !== e.note)
+        d.note !== e.note ||
+        d.location !== (e.location || null))
     );
   }
   return !!(
     d.expr ||
     d.note ||
     d.date !== localToday() ||
-    d.type !== EXPENSE ||
-    d.categoryId !== d.initialCategoryId
+    d.location
   );
+}
+function changeEntryLocation() {
+  const draft = state.entry;
+  if (!draft || state.saveBusy) return;
+  draft.note = $("#entryNote")?.value ?? draft.note;
+  openPlacePicker({ selected: Boolean(draft.location), apply: selected => {
+    if (state.entry !== draft) return;
+    draft.location = selected?.location || null;
+    if (selected?.name) {
+      const combined = appendManualPlace(draft.note, selected.name);
+      if (combined === null) toast("备注已达字数限制，已保留原文。可缩短备注后重新选地点。");
+      else draft.note = combined;
+      draft.clues = cluesWithPlace(draft.clues, selected.name);
+    }
+  } });
+}
+async function openPlacePicker({ selected, apply }) {
+  modal({ kind: "bookingPlace", loading: true, selected, names: [], apply });
+  const picker = state.modal;
+  const location = await currentLedgerLocation();
+  if (state.modal !== picker) return;
+  picker.loading = false;
+  picker.location = location;
+  if (location) {
+    try {
+      const nearby = await queryEntries({ nearby: { origin: location, km: 2 } });
+      picker.names = [...new Set(nearby.flatMap(entry => [
+        [entry.location.city, entry.location.district].filter(Boolean).join(" · "), entry.location.district,
+      ]).filter(Boolean))].slice(0, 5);
+    } catch { /* The position and custom entry work independently. */ }
+  }
+  if (state.modal === picker) {
+    picker.name = $("#bookingPlaceName")?.value || "";
+    render();
+  }
 }
 function back() {
   if (state.modal) {
@@ -774,6 +1101,7 @@ function back() {
   }
   const targets = {
     detail: state.detailOrigin,
+    search: "home",
     categoryDetail: state.filter?.origin || "stats",
     bills: "tools",
     report: "bills",
@@ -782,6 +1110,9 @@ function back() {
     assets: "tools",
     categories: state.categoryOrigin,
     settings: "mine",
+    assistant: assistantOrigin,
+    assistantSettings: assistantSettingsOrigin,
+    assistantHistory: "assistant",
   };
   navigate(targets[state.page] || "home");
 }
@@ -808,7 +1139,7 @@ function onKey(key) {
   $("#entryError").textContent = "";
 }
 async function saveEntry() {
-  if (state.saveBusy) return;
+  if (state.saveBusy || !state.entry?.categoryId) return;
   const d = state.entry;
   d.note = $("#entryNote").value.trim();
   let amountMinor;
@@ -820,7 +1151,7 @@ async function saveEntry() {
       !c ||
       c.type !== d.type ||
       (c.hidden &&
-        c.id !== state.data.entries.find((e) => e.id === d.id)?.categoryId)
+        c.id !== state.detailEntry?.categoryId)
     )
       throw new Error("请选择有效分类");
     if ([...d.note].length > 200) throw new Error("备注最多200字");
@@ -832,10 +1163,11 @@ async function saveEntry() {
   state.saveBusy = true;
   render();
   try {
-    const old = d.id ? state.data.entries.find((e) => e.id === d.id) : null,
+    const old = d.id ? state.detailEntry : null,
       now = new Date().toISOString();
     const entry = {
-      id: old?.id || uid(),
+      ...old,
+      id: old?.id || (d.saveId ||= uid()),
       type: d.type,
       amountMinor,
       categoryId: d.categoryId,
@@ -843,15 +1175,20 @@ async function saveEntry() {
       note: d.note,
       createdAt: old?.createdAt || now,
       updatedAt: now,
+      location: d.location,
+      ...(d.clues?.length ? { clues: d.clues } : {}),
     };
     await putEntry(entry);
-    state.lastCategory[d.type] = d.categoryId;
-    await reload();
-    state.detailId = entry.id;
-    navigate(old ? "detail" : state.entryOrigin);
-    toast(
-      `已保存${entry.businessDate === localToday() ? "" : ` · ${entry.businessDate}`}`,
-    );
+    state.detailEntry = entry;
+    const destination = old ? "detail" : state.entryOrigin;
+    if (destination === "home") state.month = entry.businessDate.slice(0, 7);
+    const scope = scopeFor(destination);
+    state.data = await loadLedger(scope);
+    ledgerScope = scope;
+    entryCover("entry-closing", () => {
+      showEntrySaved(entry.id, destination);
+      navigate(destination, "");
+    });
   } catch (err) {
     d.error = `保存失败：${err.message}`;
     state.saveBusy = false;
@@ -861,12 +1198,12 @@ async function saveEntry() {
   state.saveBusy = false;
 }
 async function deleteEntry() {
-  const e = state.data.entries.find((x) => x.id === state.detailId);
+  const e = state.detailEntry;
   if (!e) return;
   await removeEntry(e.id);
   state.undo = e;
   await reload();
-  navigate("home");
+  await navigate("home");
   toast("记录已删除");
   setTimeout(() => {
     if (state.undo?.id === e.id) {
@@ -928,6 +1265,7 @@ async function saveCategory() {
     )
       throw new Error("同类型分类名称不能重复");
     const old = m.id ? cById(m.id) : null;
+    if (isDiningCategory(old) && name !== old.name) throw new Error("餐饮是固定支出分类");
     const category = old
       ? { ...old, name, iconKey }
       : {
@@ -953,19 +1291,23 @@ async function saveCategory() {
 }
 async function toggleCategory(id) {
   const c = cById(id);
-  if (!c) return;
+  if (!c || isDiningCategory(c)) return;
   if (!c.hidden && activeCategories(c.type).length <= 1) {
     toast("至少保留一个可用分类");
     return;
   }
   await putCategory({ ...c, hidden: !c.hidden });
+  if (!c.hidden && state.entry?.categoryId === id &&
+    state.detailEntry?.categoryId !== id) {
+    state.entry.categoryId = null;
+  }
   await reload();
   toast(c.hidden ? "分类已恢复" : "分类已隐藏");
 }
 async function reorderCategory(sourceId, targetId) {
   const a = cById(sourceId),
     b = cById(targetId);
-  if (!a || !b || a.type !== b.type || a.id === b.id) return;
+  if (!a || !b || a.type !== b.type || a.id === b.id || isDiningCategory(a) || isDiningCategory(b)) return;
   const rows = activeCategories(a.type, true),
     from = rows.findIndex((x) => x.id === a.id),
     to = rows.findIndex((x) => x.id === b.id);
@@ -974,12 +1316,37 @@ async function reorderCategory(sourceId, targetId) {
   await putCategories(rows.map((category, sortIndex) => ({ ...category, sortIndex })));
   await reload();
 }
-function exportBackup() {
-  const data = JSON.stringify(state.data, null, 2),
-    url = URL.createObjectURL(new Blob([data], { type: "application/json" })),
+function backupWorker(action, payload) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./ledger-backup.js", import.meta.url), { type: "module" });
+    worker.onmessage = ({ data }) => {
+      worker.terminate();
+      if (data.error) reject(new Error(data.error));
+      else resolve(data.result);
+    };
+    worker.onerror = () => {
+      worker.terminate();
+      reject(new Error("无法处理备份文件"));
+    };
+    worker.postMessage({ action, payload });
+  });
+}
+let exportingBackup = false;
+async function exportBackup(legacy = false) {
+  if (exportingBackup) return;
+  exportingBackup = true;
+  try {
+    const data = await backupWorker(legacy ? "json" : "pack");
+    downloadBackup(data, legacy);
+  } finally {
+    exportingBackup = false;
+  }
+}
+function downloadBackup(data, legacy) {
+  const url = URL.createObjectURL(new Blob([data], { type: legacy ? "application/json" : "application/zip" })),
     link = document.createElement("a");
   link.href = url;
-  link.download = `简账备份-${localToday()}.json`;
+  link.download = `爱记账备份-${localToday()}.${legacy ? "json" : "zip"}`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -987,21 +1354,36 @@ function exportBackup() {
   toast("已触发备份下载，请确认文件已保留");
 }
 async function previewRestore() {
+  const dialog = state.modal;
+  if (dialog.busy) return;
   if (!$("#backupConfirmed").checked) {
     $("#restoreError").textContent = "请先确认已保留当前账本备份";
     return;
   }
   const file = $("#restoreFile").files[0];
   if (!file) {
-    $("#restoreError").textContent = "请选择 JSON 文件";
+    $("#restoreError").textContent = "请选择 ZIP 或 JSON 备份文件";
     return;
   }
+  dialog.busy = true;
+  dialog.status = "正在校验备份…";
+  render();
   try {
-    if (file.size > 100 * 1024 * 1024) throw new Error("备份文件过大");
-    const data = validateLedger(JSON.parse(await file.text()));
-    modal({ kind: "restorePreview", data });
+    if (file.size > 180 * 1024 * 1024) throw new Error("备份文件过大");
+    const data = await backupWorker("unpack", file);
+    if (state.modal === dialog) {
+      let start = "9999-12-31", end = "";
+      for (const entry of data.entries) {
+        if (entry.businessDate < start) start = entry.businessDate;
+        if (entry.businessDate > end) end = entry.businessDate;
+      }
+      modal({ kind: "restorePreview", data, range: end ? `${start} — ${end}` : "无记录" });
+    }
   } catch (err) {
-    $("#restoreError").textContent = `校验失败：${err.message}`;
+    dialog.status = `校验失败：${err.message}`;
+  } finally {
+    dialog.busy = false;
+    if (state.modal === dialog) render();
   }
 }
 function drawShare() {
@@ -1027,7 +1409,7 @@ function drawShare() {
   ctx.fillRect(38, 38, 644, 964);
   ctx.fillStyle = "#246b54";
   ctx.font = "bold 30px system-ui";
-  ctx.fillText("简账", 72, 104);
+  ctx.fillText("爱记账", 72, 104);
   ctx.fillStyle = "#62736c";
   ctx.font = "24px system-ui";
   ctx.fillText(annual ? `${y}年账单` : `${yearMonth(m)}账单`, 72, 154);
@@ -1078,7 +1460,7 @@ function drawShare() {
     }
   }
   if (state.shareOptions.achievements) {
-    const a = achievements(state.data.entries);
+    const a = rollupAchievements(state.data.monthlyStats);
     ctx.fillStyle = "#172d26";
     ctx.font = "bold 25px system-ui";
     ctx.fillText(
@@ -1089,14 +1471,14 @@ function drawShare() {
   }
   ctx.fillStyle = "#62736c";
   ctx.font = "19px system-ui";
-  ctx.fillText("由简账生成 · 不含备注及资产", 72, 958);
+  ctx.fillText("由爱记账生成 · 不含备注及资产", 72, 958);
   state.shareUrl = canvas.toDataURL("image/png");
 }
 function downloadShare() {
   if (!state.shareUrl) drawShare();
   const a = document.createElement("a");
   a.href = state.shareUrl;
-  a.download = `简账报告-${state.page === "annual" ? state.reportYear : state.reportMonth}.png`;
+  a.download = `爱记账报告-${state.page === "annual" ? state.reportYear : state.reportMonth}.png`;
   document.body.append(a);
   a.click();
   a.remove();
@@ -1111,7 +1493,7 @@ async function handleAction(el) {
   try {
     switch (a) {
       case "nav":
-        if (state.page !== v) withViewTransition((nativeTransition) => navigate(v, nativeTransition ? "" : null));
+        if (state.page !== v) navigate(v, "");
         break;
       case "go-home":
         navigate("home");
@@ -1122,16 +1504,33 @@ async function handleAction(el) {
       case "new-entry":
         openEntryCover();
         break;
-      case "detail":
-        state.detailId = id;
-        state.detailOrigin = state.page;
-        navigate("detail");
+      case "open-search":
+        await navigate("search");
+        $("#ledgerSearch input")?.focus({ preventScroll: true });
         break;
+      case "search-more":
+        state.searchLimit += 40;
+        render();
+        break;
+      case "detail": {
+        const origin = state.page;
+        const entry = await readEntry(id);
+        if (state.page !== origin) break;
+        if (!entry) {
+          toast("记录已不存在");
+          break;
+        }
+        state.detailEntry = entry;
+        state.detailOrigin = origin;
+        await navigate("detail");
+        break;
+      }
       case "edit-entry":
-        beginEntry(state.data.entries.find((x) => x.id === state.detailId));
+        if (state.detailEntry) beginEntry(state.detailEntry);
         break;
       case "ask-delete-entry": {
-        const e = state.data.entries.find((x) => x.id === state.detailId);
+        const e = state.detailEntry;
+        if (!e) break;
         modal({
           kind: "confirm",
           title: "删除这笔记录？",
@@ -1149,24 +1548,24 @@ async function handleAction(el) {
         const d = state.entry;
         if (d.type === v) break;
         d.type = v;
-        d.categoryId = activeCategories(v).some(
-          (c) => c.id === state.lastCategory[v],
-        )
-          ? state.lastCategory[v]
-          : activeCategories(v)[0]?.id || null;
-        state.showAllCats = false;
-        state.motion = "motion-fade";
+        d.categoryId = null;
+        d.error = "";
         render();
+        $(".entry-fields").scrollTop = 0;
+        $(`[data-action="entry-type"][data-value="${v}"]`)?.focus({ preventScroll: true });
         break;
       }
-      case "entry-category":
-        state.entry.categoryId = id;
+      case "entry-category": {
+        const entry = state.entry;
+        state.entryDockEntering = !entry.categoryId;
+        entry.categoryId = id;
+        entry.error = "";
         render();
+        const selected = $(".gridcats .cat.on");
+        selected?.scrollIntoView({ block: "nearest" });
+        selected?.focus({ preventScroll: true });
         break;
-      case "toggle-cats":
-        state.showAllCats = !state.showAllCats;
-        render();
-        break;
+      }
       case "category-manage":
         state.catType = state.entry.type;
         state.categoryOrigin = "entry";
@@ -1177,6 +1576,22 @@ async function handleAction(el) {
         break;
       case "save-entry":
         await saveEntry();
+        break;
+      case "entry-location":
+        changeEntryLocation();
+        break;
+      case "use-booking-place": {
+        const picker = state.modal;
+        const field = $("#bookingPlaceName");
+        const name = v === "custom" ? field.value.trim() : v || "";
+        if (v === "custom" && !name) { field.focus(); break; }
+        picker.apply({ name, location: picker.location || null });
+        closeModal();
+        break;
+      }
+      case "remove-booking-place":
+        state.modal.apply(null);
+        closeModal();
         break;
       case "pick-date":
         modal({ kind: "pickDate", pending: state.entry.date, month: state.entry.date.slice(0, 7), mode: "calendar", input: state.entry.date, error: "" });
@@ -1241,15 +1656,16 @@ async function handleAction(el) {
           m.pending = m.input;
         }
         if (!isValidDate(m.pending)) break;
+        if (state.entry.date !== m.pending && state.entry.location) {
+          state.entry.location = null;
+        }
         state.entry.date = m.pending;
         closeModal();
         break;
       }
       case "set-month":
         if (canShiftMonth(state.month, delta)) {
-          state.month = shiftMonth(state.month, delta);
-          state.motion = delta > 0 ? "motion-next" : "motion-prev";
-          render();
+          await showLedgerMonth(shiftMonth(state.month, delta));
         }
         break;
       case "pick-month":
@@ -1276,9 +1692,7 @@ async function handleAction(el) {
           toast("请选择有效月份");
           break;
         }
-        state.month = value;
-        state.motion = "motion-fade";
-        closeModal();
+        await showLedgerMonth(value);
         break;
       }
       case "stats-type":
@@ -1286,12 +1700,9 @@ async function handleAction(el) {
         state.trendPoint = null;
         render();
         break;
-      case "stats-period":
-        state.statsPeriod = v;
-        state.trendPoint = null;
-        render();
-        break;
       case "stats-shift": {
+        const bounds = periodBounds(state.statsPeriod, state.statsAnchor);
+        if ((delta > 0 && bounds.fullEnd >= localToday()) || (delta < 0 && bounds.start <= "1900-01-01")) break;
         if (state.statsPeriod === "week")
           state.statsAnchor = shiftDate(state.statsAnchor, delta * 7);
         else if (state.statsPeriod === "month")
@@ -1299,8 +1710,7 @@ async function handleAction(el) {
         else
           state.statsAnchor = `${Number(state.statsAnchor.slice(0, 4)) + delta}-01-01`;
         state.trendPoint = null;
-        state.motion = delta > 0 ? "motion-next" : "motion-prev";
-        render();
+        await reload();
         break;
       }
       case "trend-point":
@@ -1387,7 +1797,8 @@ async function handleAction(el) {
         break;
       case "edit-category": {
         const c = cById(id);
-        modal({ kind: "category", id, name: c.name, iconKey: c.iconKey });
+        const inUse = c.isBuiltin || await categoryInUse(id);
+        if (state.page === "categories") modal({ kind: "category", id, name: c.name, iconKey: c.iconKey, inUse });
         break;
       }
       case "save-category":
@@ -1420,7 +1831,10 @@ async function handleAction(el) {
         break;
       }
       case "export":
-        exportBackup();
+        await exportBackup();
+        break;
+      case "export-json":
+        await exportBackup(true);
         break;
       case "restore":
         modal({ kind: "restore" });
@@ -1429,11 +1843,19 @@ async function handleAction(el) {
         await previewRestore();
         break;
       case "confirm-restore": {
-        const data = state.modal.data;
-        await replaceLedger(data);
+        const preview = state.modal;
+        if (preview.busy) break;
+        preview.busy = true;
+        render();
+        try {
+          await backupWorker("restore", preview.data);
+        } catch (error) {
+          preview.busy = false;
+          throw error;
+        }
         state.modal = null;
         await reload();
-        navigate("home");
+        await navigate("home");
         toast("备份已恢复");
         break;
       }
@@ -1448,10 +1870,10 @@ async function handleAction(el) {
           $("#clearError").textContent = "请确认备份并准确输入“清空账本”";
           break;
         }
-        await clearLedger();
+        await assistant.clearLocalData();
         state.modal = null;
         await reload();
-        navigate("home");
+        await navigate("home");
         toast("账本已清空");
         break;
       case "share":
@@ -1495,6 +1917,7 @@ async function handleAction(el) {
           toast("预算已删除");
         }
         if (m.target === "remove-category") {
+          if (isDiningCategory(cById(m.id))) break;
           await removeCategory(m.id);
           await reload();
           toast("分类已删除");
@@ -1508,11 +1931,85 @@ async function handleAction(el) {
   }
 }
 
+phone.addEventListener("pointerdown", (event) => {
+  // Keep the dock from moving under the pointer when the note field loses focus.
+  if (document.activeElement?.id === "entryNote" && event.target.closest('[data-action="entry-location"]')) event.preventDefault();
+});
 phone.addEventListener("click", (e) => {
-  const target = e.target.closest("[data-action]");
-  if (target && phone.contains(target)) handleAction(target);
+  const aiControl = e.target.closest("[data-assistant]");
+  if (aiControl && phone.contains(aiControl)) {
+    void assistant.act(aiControl);
+    return;
+  }
+  const pageControl = e.target.closest("[data-action]");
+  if (pageControl?.dataset.action === "open-assistant") {
+    assistantOrigin = state.page;
+    navigate("assistant");
+    return;
+  }
+  if (pageControl?.dataset.action === "assistant-settings") {
+    assistantSettingsOrigin = state.page;
+    navigate("assistantSettings");
+    return;
+  }
+  if (pageControl?.dataset.action === "assistant-history") {
+    navigate("assistantHistory");
+    return;
+  }
+  if (pageControl?.dataset.action === "assistant-latest") {
+    const thread = $(".assistant-thread");
+    if (thread) {
+      thread.scrollTop = thread.scrollHeight;
+      thread.focus({ preventScroll: true });
+      updateChatJump(thread);
+    }
+    return;
+  }
+  if (pageControl && phone.contains(pageControl)) handleAction(pageControl);
+});
+phone.addEventListener("submit", async (event) => {
+  if (event.target.id !== "ledgerSearch") {
+    assistant.submit(event);
+    return;
+  }
+  event.preventDefault();
+  try {
+    await searchLedger(new FormData(event.target).get("query"));
+    if (state.page === "search") render();
+  } catch (error) {
+    if (state.page === "search") toast(`搜索失败：${error.message}`);
+  }
+});
+phone.addEventListener("keydown", assistant.onKeyDown);
+phone.addEventListener("scroll", (event) => {
+  if (event.target.classList?.contains("assistant-thread")) updateChatJump(event.target);
+}, true);
+phone.addEventListener("change", async (event) => {
+  if (event.target.name === "app-theme") {
+    const value = event.target.value;
+    if (!themes.some(([id]) => id === value)) return;
+    activeTheme = value;
+    document.documentElement.dataset.theme = value;
+    try {
+      localStorage.setItem(themeStorageKey, value);
+      $("#themeStatus").textContent = "";
+    } catch {
+      $("#themeStatus").textContent = "主题已切换，但浏览器无法保存配色。";
+    }
+    return;
+  }
+  if (event.target.id !== "statsPeriod") return;
+  state.statsPeriod = event.target.value;
+  state.trendPoint = null;
+  try {
+    await reload();
+  } catch (error) {
+    toast(`读取统计失败：${error.message}`);
+  }
+  $("#statsPeriod")?.focus({ preventScroll: true });
 });
 phone.addEventListener("input", (e) => {
+  assistant.onInput(e);
   if (state.page === "entry" && state.entry) {
     if (e.target.id === "entryNote") state.entry.note = e.target.value;
   }
@@ -1554,14 +2051,9 @@ $("#width390").addEventListener("click", () => {
   $("#width360").classList.remove("selected");
 });
 try {
-  state.data = await loadLedger();
-  for (const type of [EXPENSE, INCOME]) {
-    const last = sortEntries(
-      state.data.entries.filter((e) => e.type === type),
-    ).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    if (last && activeCategories(type).some((c) => c.id === last.categoryId))
-      state.lastCategory[type] = last.categoryId;
-  }
+  ledgerScope = scopeFor("home");
+  state.data = await loadLedger(ledgerScope);
+  await assistant.initHistory();
   render();
 } catch (err) {
   phone.innerHTML = `<div class="loading"><h2>无法打开本地账本</h2><p>${E(err.message)}</p><button class="primary" onclick="location.reload()">重试</button></div>`;
