@@ -312,7 +312,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
 
   function transcript() {
     let html = "", reply = "";
-    const group = contents => '<div class="ai-turn"><div class="ai-turn-label"><span class="ai-spark" aria-hidden="true">✦</span>简账助手</div>' + contents + '</div>';
+    const group = contents => '<div class="ai-turn"><div class="ai-turn-label"><span class="ai-spark" aria-hidden="true">✦</span>爱记账助手</div>' + contents + '</div>';
     for (const item of chat) {
       if (item.kind === "text" && item.user) {
         if (reply) html += group(reply);

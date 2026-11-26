@@ -416,7 +416,7 @@ function assetsPage() {
 }
 function mine() {
   const a = rollupAchievements(state.data.monthlyStats);
-  return `<div class="card"><div class="row"><span class="ico" style="height:52px;width:52px;font-size:1.533rem">账</span><div style="flex:1"><strong>认真记录每一天</strong><div class="micro">简账 · 本地账本</div></div></div></div><div class="card achievement"><div><strong>${a.streak}</strong><span>连续记账</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div></div><div class="list"><button class="menu" data-action="categories"><span class="ico">◇</span><span>分类管理</span><span class="chev">›</span></button><button class="menu" data-action="settings"><span class="ico">⚙</span><span>设置与数据</span><span class="chev">›</span></button><button class="menu" data-action="help"><span class="ico">?</span><span>使用说明</span><span class="chev">›</span></button><button class="menu" data-action="about"><span class="ico">♡</span><span>关于简账</span><span class="chev">›</span></button></div>`;
+  return `<div class="card"><div class="row"><span class="ico" style="height:52px;width:52px;font-size:1.533rem">账</span><div style="flex:1"><strong>认真记录每一天</strong><div class="micro">爱记账 · 本地账本</div></div></div></div><div class="card achievement"><div><strong>${a.streak}</strong><span>连续记账</span></div><div><strong>${a.days}</strong><span>记账天数</span></div><div><strong>${a.count}</strong><span>总笔数</span></div></div><div class="list"><button class="menu" data-action="categories"><span class="ico">◇</span><span>分类管理</span><span class="chev">›</span></button><button class="menu" data-action="settings"><span class="ico">⚙</span><span>设置与数据</span><span class="chev">›</span></button><button class="menu" data-action="help"><span class="ico">?</span><span>使用说明</span><span class="chev">›</span></button><button class="menu" data-action="about"><span class="ico">♡</span><span>关于爱记账</span><span class="chev">›</span></button></div>`;
 }
 function categoryManage() {
   const list = activeCategories(state.catType, true),
@@ -617,7 +617,7 @@ function header() {
       assistantHistory: "历史会话",
     };
   const saved = state.savedEntry?.page === state.page ? '<span class="save-status" role="status">✓ 已保存</span>' : "";
-  return `<header class="top ${state.page === "entry" ? "entry-top" : ""} ${state.page === "assistant" ? "assistant-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "简账")}</h1>${saved}${main ? amountVisibilityButton() : ""}${assistantEntryHtml()}</header>`;
+  return `<header class="top ${state.page === "entry" ? "entry-top" : ""} ${state.page === "assistant" ? "assistant-top" : ""}">${main ? "" : `<button class="back" data-action="back" aria-label="${state.page === "entry" ? "取消记账" : "返回"}">${state.page === "entry" ? "取消" : uiIcon("chevronLeft")}</button>`}<h1>${E(titles[state.page] || "爱记账")}</h1>${saved}${main ? amountVisibilityButton() : ""}${assistantEntryHtml()}</header>`;
 }
 function navbar() {
   if (!["home", "stats", "tools", "mine"].includes(state.page)) return "";
@@ -682,7 +682,7 @@ function modalHtml() {
       body = `<h2>使用说明</h2><p>点击“记一笔”选择收支分类，用金额键盘输入数字或加减表达式。选择过去日期可补记。点击明细可编辑或删除，删除后 5 秒内可撤销。</p><p>工具中可查看账单、设置月预算和手动维护资产。数据仅保存在当前浏览器，建议定期导出备份。</p><button class="primary" data-action="close-modal">知道了</button>`;
       break;
     case "about":
-      body = `<h2>关于简账</h2><p>简账 Web 功能验收版 · 数据仅保存在本机浏览器。</p><button class="primary" data-action="close-modal">关闭</button>`;
+      body = `<h2>关于爱记账</h2><p>爱记账 Web 功能验收版 · 数据仅保存在本机浏览器。</p><button class="primary" data-action="close-modal">关闭</button>`;
       break;
     case "clear":
       body = `<h2>清空全部数据</h2><p class="danger">流水、分类调整、预算、资产和 AI 历史会话都将删除。请先导出备份。</p><button class="outline" data-action="export">导出当前备份</button><label><input id="clearBacked" type="checkbox"> 我已保留备份，仍要清空</label><label for="clearPhrase">输入“清空账本”再次确认</label><input id="clearPhrase" class="field" placeholder="清空账本"><p id="clearError" class="error"></p><button class="primary" data-action="confirm-clear">确认清空</button><button class="outline" data-action="close-modal">取消</button>`;
@@ -1324,7 +1324,7 @@ function downloadBackup(data, legacy) {
   const url = URL.createObjectURL(new Blob([data], { type: legacy ? "application/json" : "application/zip" })),
     link = document.createElement("a");
   link.href = url;
-  link.download = `简账备份-${localToday()}.${legacy ? "json" : "zip"}`;
+  link.download = `爱记账备份-${localToday()}.${legacy ? "json" : "zip"}`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -1387,7 +1387,7 @@ function drawShare() {
   ctx.fillRect(38, 38, 644, 964);
   ctx.fillStyle = "#246b54";
   ctx.font = "bold 30px system-ui";
-  ctx.fillText("简账", 72, 104);
+  ctx.fillText("爱记账", 72, 104);
   ctx.fillStyle = "#62736c";
   ctx.font = "24px system-ui";
   ctx.fillText(annual ? `${y}年账单` : `${yearMonth(m)}账单`, 72, 154);
@@ -1449,14 +1449,14 @@ function drawShare() {
   }
   ctx.fillStyle = "#62736c";
   ctx.font = "19px system-ui";
-  ctx.fillText("由简账生成 · 不含备注及资产", 72, 958);
+  ctx.fillText("由爱记账生成 · 不含备注及资产", 72, 958);
   state.shareUrl = canvas.toDataURL("image/png");
 }
 function downloadShare() {
   if (!state.shareUrl) drawShare();
   const a = document.createElement("a");
   a.href = state.shareUrl;
-  a.download = `简账报告-${state.page === "annual" ? state.reportYear : state.reportMonth}.png`;
+  a.download = `爱记账报告-${state.page === "annual" ? state.reportYear : state.reportMonth}.png`;
   document.body.append(a);
   a.click();
   a.remove();

@@ -1,6 +1,7 @@
 param(
     [string]$SdkPath = $env:ANDROID_HOME,
-    [string]$JdkPath = $env:JAVA_HOME
+    [string]$JdkPath = $env:JAVA_HOME,
+    [switch]$Acceptance
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +18,7 @@ if (-not (Test-Path (Join-Path $SdkPath 'platforms\android-35\android.jar'))) { 
 $env:JAVA_HOME = $JdkPath
 $tools = Join-Path $SdkPath 'build-tools\35.0.0'
 $androidJar = Join-Path $SdkPath 'platforms\android-35\android.jar'
-$build = Join-Path $projectRoot 'app\build\manual'
+$build = Join-Path $projectRoot $(if ($Acceptance) { 'app\build\manual-acceptance' } else { 'app\build\manual' })
 $classes = Join-Path $build 'classes'
 $dex = Join-Path $build 'dex'
 New-Item -ItemType Directory -Force -Path $classes, $dex | Out-Null
@@ -32,8 +33,20 @@ Run (Join-Path $JdkPath 'bin\javac.exe') (@('-encoding','UTF-8','-source','17','
 Run (Join-Path $tools 'aapt2.exe') @('compile','--dir',(Join-Path $projectRoot 'app\src\main\res'),'-o',(Join-Path $build 'resources.zip'))
 $sourceManifest = Get-Content -Raw (Join-Path $projectRoot 'app\src\main\AndroidManifest.xml')
 $generatedManifest = Join-Path $build 'AndroidManifest.xml'
-$sourceManifest.Replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.wuhene.simpleledger" android:versionCode="4" android:versionName="0.2.0">') | Set-Content -Encoding utf8 $generatedManifest
-Run (Join-Path $tools 'aapt2.exe') @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35','-A',(Join-Path $projectRoot 'app\src\main\assets'),(Join-Path $build 'resources.zip'))
+$gradleConfig = Get-Content -Raw (Join-Path $projectRoot 'app\build.gradle')
+$versionCode = [regex]::Match($gradleConfig, 'versionCode\s+(\d+)').Groups[1].Value
+$versionName = [regex]::Match($gradleConfig, "versionName\s+'([^']+)'").Groups[1].Value
+if (-not $versionCode -or -not $versionName) { throw '无法读取 Android 版本号。' }
+$applicationId = if ($Acceptance) { 'com.wuhene.simpleledger.acceptance' } else { 'com.wuhene.simpleledger' }
+$manifestHead = '<manifest xmlns:android="http://schemas.android.com/apk/res/android"'
+$sourceManifest.Replace("$manifestHead>", "$manifestHead package=`"$applicationId`" android:versionCode=`"$versionCode`" android:versionName=`"$versionName`">").Replace('${applicationId}', $applicationId) | Set-Content -Encoding utf8 $generatedManifest
+$link = @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35','-A',(Join-Path $projectRoot 'app\src\main\assets'))
+if ($Acceptance) {
+    $acceptanceAssets = Join-Path $projectRoot 'app\src\acceptance\assets'
+    if (-not (Test-Path (Join-Path $acceptanceAssets 'acceptance-ledger.zip'))) { throw '缺少独立验收包的合成账本。' }
+    $link += @('-A', $acceptanceAssets)
+}
+Run (Join-Path $tools 'aapt2.exe') ($link + (Join-Path $build 'resources.zip'))
 Run (Join-Path $JdkPath 'bin\jar.exe') @('cf',(Join-Path $build 'classes.jar'),'-C',$classes,'.')
 Run (Join-Path $tools 'd8.bat') @('--min-api','26','--lib',$androidJar,'--output',$dex,(Join-Path $build 'classes.jar'))
 Run (Join-Path $JdkPath 'bin\jar.exe') @('uf',(Join-Path $build 'unsigned.apk'),'-C',$dex,'classes.dex')
@@ -43,7 +56,7 @@ $key = Join-Path $repoRoot '.tools\debug.keystore'
 if (-not (Test-Path $key)) {
     Run (Join-Path $JdkPath 'bin\keytool.exe') @('-genkeypair','-keystore',$key,'-alias','androiddebugkey','-storepass','android','-keypass','android','-dname','CN=Android Debug,O=Android,C=US','-keyalg','RSA','-keysize','2048','-validity','10000')
 }
-$apk = Join-Path $projectRoot 'SimpleLedger-debug.apk'
+$apk = Join-Path $projectRoot $(if ($Acceptance) { 'AiLedger-acceptance.apk' } else { 'SimpleLedger-debug.apk' })
 Run (Join-Path $tools 'apksigner.bat') @('sign','--ks',$key,'--ks-key-alias','androiddebugkey','--ks-pass','pass:android','--key-pass','pass:android','--out',$apk,(Join-Path $build 'aligned.apk'))
 Run (Join-Path $tools 'apksigner.bat') @('verify','--verbose',$apk)
 Get-FileHash -Algorithm SHA256 $apk | Format-List

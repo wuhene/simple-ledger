@@ -53,7 +53,7 @@ export async function unpackLedger(buffer) {
     if (size > archiveLimit || seen.size > 4000) throw new Error("备份解压后超过容量限制");
     return true;
   } });
-  if (!files["manifest.json"] || !files["ledger.json"]) throw new Error("缺少简账备份清单或账本资料");
+  if (!files["manifest.json"] || !files["ledger.json"]) throw new Error("缺少爱记账备份清单或账本资料");
   const manifest = JSON.parse(decoder.decode(files["manifest.json"]));
   if (manifest?.format !== format || manifest.version !== 1 || !Array.isArray(manifest.shards) ||
     !Number.isInteger(manifest.count) || manifest.count < 0 || manifest.count > 120000 ||

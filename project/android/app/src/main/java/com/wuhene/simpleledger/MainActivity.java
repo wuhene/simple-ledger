@@ -113,6 +113,7 @@ public final class MainActivity extends Activity {
         host.addView(loading, new FrameLayout.LayoutParams(-1, -1));
         new Thread(() -> {
             try {
+                prepareAcceptanceLedger(loading);
                 boolean hide = db.hideAmounts();
                 LedgerAssistant restored = new LedgerAssistant(this, db);
                 runOnUiThread(() -> {
@@ -746,7 +747,7 @@ public final class MainActivity extends Activity {
         pen.setTypeface(Typeface.DEFAULT_BOLD);
         pen.setColor(ACTION_TEXT);
         pen.setTextSize(56);
-        canvas.drawText("简账 · 收支报告", 72, 123, pen);
+        canvas.drawText("爱记账 · 收支报告", 72, 123, pen);
         pen.setTextSize(32);
         canvas.drawText(start + "  —  " + end, 72, 174, pen);
         pen.setColor(DARK);
@@ -777,7 +778,7 @@ public final class MainActivity extends Activity {
         space(body, 8);
         LinearLayout profile = card();
         profile.addView(text("认真记录每一天", 17, DARK, true));
-        profile.addView(text("简账 · 本地账本", 13, MUTED, false));
+        profile.addView(text("爱记账 · 本地账本", 13, MUTED, false));
         addCard(body, profile);
         renderAchievements(body);
         menu(body, "分类管理", "调整分类与显示状态", () -> navigate("categories", null));
@@ -785,8 +786,8 @@ public final class MainActivity extends Activity {
         menu(body, "使用说明", "手动记账、AI 和数据备份", () -> new AlertDialog.Builder(this).setTitle("使用说明")
                 .setMessage("点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。")
                 .setPositiveButton("知道了", null).show());
-        menu(body, "关于简账", "原生 Android · 本地账本", () -> new AlertDialog.Builder(this).setTitle("关于简账")
-                .setMessage("简账 Android 0.2.0。流水保存在手机本机。").setPositiveButton("关闭", null).show());
+        menu(body, "关于爱记账", "原生 Android · 本地账本", () -> new AlertDialog.Builder(this).setTitle("关于爱记账")
+                .setMessage("爱记账 Android 0.2.1。流水保存在手机本机。").setPositiveButton("关闭", null).show());
     }
     /**
      * 显示月预算使用进度并提供当月编辑。
@@ -1660,7 +1661,7 @@ public final class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.setType(legacy ? "application/json" : "application/zip");
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.putExtra(Intent.EXTRA_TITLE, "简账备份-" + LedgerMath.today() + (legacy ? ".json" : ".zip"));
+        intent.putExtra(Intent.EXTRA_TITLE, "爱记账备份-" + LedgerMath.today() + (legacy ? ".json" : ".zip"));
         startActivityForResult(intent, legacy ? EXPORT_JSON : EXPORT);
     }
 
@@ -1707,7 +1708,7 @@ public final class MainActivity extends Activity {
         JSONArray messages = assistant.messages();
         if (messages.length() == 0) {
             LinearLayout intro = card();
-            intro.addView(text("✦  简账助手", 20, DARK, true));
+            intro.addView(text("✦  爱记账助手", 20, DARK, true));
             space(intro, 8);
             intro.addView(text("用一句话记账、查流水，或者聊聊你的花销。", 15, MUTED, false));
             if (assistant.configured()) {
@@ -1735,7 +1736,7 @@ public final class MainActivity extends Activity {
                 body.addView(bubble, position);
                 continue;
             }
-            TextView sender = text("✦  简账助手", 13, GREEN, true);
+            TextView sender = text("✦  爱记账助手", 13, GREEN, true);
             body.addView(sender, lp(-1, 28));
             switch (item.optString("kind")) {
                 case "receipt": renderAssistantReceipt(body, item); break;
@@ -2507,12 +2508,12 @@ public final class MainActivity extends Activity {
                 Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                 intent.setType("image/png");
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
-                intent.putExtra(Intent.EXTRA_TITLE, "简账报告-" + LedgerMath.today() + ".png");
+                intent.putExtra(Intent.EXTRA_TITLE, "爱记账报告-" + LedgerMath.today() + ".png");
                 startActivityForResult(intent, EXPORT_REPORT);
             } else {
                 Intent intent = new Intent(Intent.ACTION_SEND);
                 intent.setType("image/png");
-                intent.putExtra(Intent.EXTRA_STREAM, Uri.parse("content://com.wuhene.simpleledger.report/report.png"));
+                intent.putExtra(Intent.EXTRA_STREAM, Uri.parse("content://" + getPackageName() + ".report/report.png"));
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 startActivity(Intent.createChooser(intent, "分享收支报告"));
             }
@@ -2539,5 +2540,23 @@ public final class MainActivity extends Activity {
         EditText field = assistantSettingField(parent, label, "0.00", hasValue ? LedgerMath.money(amount).replace(",", "") : "");
         field.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
         return field;
+    }
+
+    /**
+     * 在独立验收包的空账本首次启动时导入合成记录。
+     */
+    private void prepareAcceptanceLedger(TextView loading) throws Exception {
+        if (!getPackageName().endsWith(".acceptance")) return;
+        synchronized (MainActivity.class) {
+            android.content.SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+            if (preferences.getBoolean("acceptanceFixtureReady", false)) return;
+            if (db.entryCount() == 0) {
+                runOnUiThread(() -> loading.setText("首次启动正在载入 10 万笔验收流水\n请稍候…"));
+                try (InputStream archive = getAssets().open("acceptance-ledger.zip")) {
+                    db.importJson(LedgerBackup.read(archive));
+                }
+            }
+            preferences.edit().putBoolean("acceptanceFixtureReady", true).commit();
+        }
     }
 }

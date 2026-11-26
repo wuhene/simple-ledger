@@ -173,7 +173,7 @@ createServer(async (req, res) => {
   const path = req.url?.split("?")[0];
   if (path === "/ai/api" && req.method === "POST") {
     if (req.headers.origin !== "http://" + host || req.headers["content-type"] !== "application/json") {
-      return reply(res, 403, { error: "请从简账本机 Web 页面调用" });
+      return reply(res, 403, { error: "请从爱记账本机 Web 页面调用" });
     }
     return proxy(req, res);
   }
@@ -184,4 +184,4 @@ createServer(async (req, res) => {
   } catch {
     reply(res, 500, { error: "无法读取页面" });
   }
-}).listen(port, "127.0.0.1", () => console.log("简账 Web http://127.0.0.1:" + port + "/"));
+}).listen(port, "127.0.0.1", () => console.log("爱记账 Web http://127.0.0.1:" + port + "/"));

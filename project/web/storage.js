@@ -63,7 +63,7 @@ export function openDatabase() {
         resolve(req.result);
       };
       req.onerror = () => reject(req.error);
-      req.onblocked = () => reject(new Error("请关闭其他简账页面后重试"));
+      req.onblocked = () => reject(new Error("请关闭其他爱记账页面后重试"));
     });
   return dbPromise;
 }
