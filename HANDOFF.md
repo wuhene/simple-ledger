@@ -1,6 +1,6 @@
 # 爱记账项目交接文档
 
-更新：2026-11-26 · 当前需求分支：`2026-11-25-2` · 状态：爱记账 Android 0.2.1 已打包，10 万笔版本待用户真机验收
+更新：2026-11-26 · 当前需求分支：`2026-11-25-2` · 状态：爱记账 Android 0.2.2 已打包，Windows 重启后继续模拟器对照
 
 ## 接手先读
 
@@ -11,14 +11,15 @@
 
 ## 当前交接（`2026-11-25-2`）
 
-- 从更新后的 `master` 开分支，沿用用户接受的 Web 工作版本 `2c9e7ad` 和上一轮 Android 原生界面基线。Web 与 Android 展示名统一为「爱记账」。Android 版本 0.2.1、versionCode 5、最低 Android 8.0。
+- 从更新后的 `master` 开分支，沿用用户接受的 Web 工作版本 `2c9e7ad` 和上一轮 Android 原生界面基线。Web 与 Android 展示名统一为「爱记账」。Android 版本 0.2.2、versionCode 6、最低 Android 8.0。
 - 优先交付 [AiLedger-acceptance.apk](project/android/AiLedger-acceptance.apk)。验收包使用独立应用 ID，首次启动在后台导入 15 年、10 万笔合成流水，完成后可在「我的」看到总笔数。含预算、资产和 2,000 笔带北京四季民福烤鸭线索的流水。[SimpleLedger-debug.apk](project/android/SimpleLedger-debug.apk) 沿用原应用 ID 和原有数据库，用于同签名覆盖升级。
 - 使用 `node project/android/generate-acceptance-ledger.mjs` 重建验收数据，`project/android/build-debug.ps1 -Acceptance` 打包独立验收版。样本仅打进独立验收包，首次成功导入后不会重复导入。Android 应用包名和 Web 备份格式保留兼容。
 - `MainActivity.java` 增加主题、分类先选后输入、下滑关闭、日期选择、可选定位、边缘跨月、全账本搜索、AI 聊天、历史、模型配置与协同的数据卡。保留 Android 系统返回及文件选择器。
 - `LedgerDb.java` 从 SQLite v1 升级到 v2。增量建立日期和全文词元索引、月汇总、逐条入库的 AI 消息和会话元数据。 `LedgerIndex.java` 处理开放线索和全文匹配，`LedgerBackup.java` 读写 Web 兼容的月分片 ZIP 和旧 JSON，导入重建派生数据。
 - `LedgerAssistant.java` 从手机直连配置的兼容模型，使用共享提示词，最多向模型发送 12 条近期事件与 6 张结构化结果摘要。统计和搜索在手机内执行，逐笔数据与设备定位留在本机。模型配置保留在本次运行的内存中。
 - 桌面验证通过 Android 构建、v2/v3 签名、包信息、Web 10 项测试、10 万条合成备份解析和 SQLite 月统计触发器检查。真机尚未安装，设备上的视觉、键盘、安全区、手势、实时定位、实际模型和导入耗时待测。
-- 用户确认由自己验收真机。将 APK 与 [验收清单](wiki/2026-11-25-2/Android与Web对齐.md) 一并交接。发现差异在本分支调整，用户明确验收后再合并主线。
+- 用户已在真机指出 0.2.1 的记录详情、资产概览、账单样式和动效差异，并要求由开发者用模拟器对照。基于 Web 的 393px 页面截图修正详情分区和按钮、资产双栏、月／年账单四列及二级页面、分类、记账、弹层动效，详见 [验收清单](wiki/2026-11-25-2/Android与Web对齐.md)。
+- 工作站已备好 Android Emulator、API 35 x86_64 Google APIs 镜像和 `simple-ledger-test` AVD。已通过 DISM 启用 `HypervisorPlatform`，日志 `.tools/ledger-hypervisor-enable.log` 显示重启后生效。当前软件模式 ADB 一直离线。重启后先运行 `emulator -accel-check`，再以 `-accel on` 启动并通过 ADB 安装独立验收包。需补录 Android 截图和动作，当前分支保持待验证。
 
 ## 当前结构
 
