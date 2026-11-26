@@ -227,7 +227,7 @@ public final class MainActivity extends Activity {
         render();
     }
     private void tab(String target) { page = new Page(target, null); history.clear(); render(); }
-    private void section(LinearLayout body, String label) { LinearLayout l = column(); padding(l, 20, 8); l.addView(text(label, 17, DARK, true)); body.addView(l); }
+    private void section(LinearLayout body, String label) { LinearLayout l = column(); padding(l, 20, 6); l.addView(text(label, 15, DARK, true)); body.addView(l); }
     /**
      * 显示带图标和说明的功能入口。
      */
@@ -281,11 +281,10 @@ public final class MainActivity extends Activity {
         if ("stats".equals(page.name)) {
             LinearLayout heading = row();
             padding(heading, 18, 4);
-            heading.addView(text("统计", 19, DARK, true), new LinearLayout.LayoutParams(0, dp(48), 1));
+            heading.addView(text("统计", 17, DARK, true), new LinearLayout.LayoutParams(0, dp(48), 1));
             View eye = eyeButton(DARK);
             eye.setBackground(shape(SOFT, 15));
             heading.addView(eye, lp(46, 44));
-            heading.addView(assistantShortcut(), lp(49, 44));
             shell.addView(heading);
         }
         ScrollView scroll = new ScrollView(this);
@@ -331,6 +330,7 @@ public final class MainActivity extends Activity {
             if (assistant.configured()) renderAssistantComposer(shell);
         }
         if (isMain()) renderTabs(shell);
+        if ("stats".equals(page.name)) addAssistantFab();
         if (animateNavigation) {
             animateNavigation = false;
             animateIn(scroll, 12, .5f, 260);
@@ -356,7 +356,7 @@ public final class MainActivity extends Activity {
             LinearLayout tab = column(); tab.setGravity(Gravity.CENTER); tab.setContentDescription(labels[i]);
             if (entry) { TextView iconView = text("+", 25, ACTION_TEXT, true); iconView.setGravity(Gravity.CENTER); iconView.setBackground(shape(ACTION, 15)); tab.addView(iconView, lp(46, 46)); }
             else { View iconView = navIcon(target, active ? GREEN : MUTED); if (active) iconView.setBackground(shape(SOFT, 12)); tab.addView(iconView, lp(40, 30)); }
-            TextView labelView = text(labels[i], 12, entry || active ? GREEN : MUTED, entry);
+            TextView labelView = text(labels[i], 11, entry || active ? GREEN : MUTED, entry);
             labelView.setGravity(Gravity.CENTER); tab.addView(labelView, lp(-1, -2));
             tab.setMinimumHeight(dp(64));
             LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, -2, entry ? 1.25f : 1f);
@@ -426,13 +426,13 @@ public final class MainActivity extends Activity {
         setPageStatusBarColor(homeHeaderColor());
         int headerInk = themeId == 0 ? ACTION_TEXT : TOP_TEXT;
         LinearLayout date = row();
-        padding(date, 16, 4);
+        padding(date, 16, 2);
         TextView previous = ghost("‹", () -> shiftHome(-1, false));
         previous.setTextColor(headerInk);
         previous.setTextSize(26);
         previous.setContentDescription("上个月");
         date.addView(previous, lp(42, 44));
-        TextView current = text(monthLabel(month) + "⌄", 15, headerInk, false);
+        TextView current = text(monthLabel(month) + "⌄", 14, headerInk, false);
         current.setTypeface(mediumFace);
         current.setContentDescription("选择月份 " + monthLabel(month));
         current.setOnClickListener(view -> chooseMonth());
@@ -447,12 +447,12 @@ public final class MainActivity extends Activity {
         LedgerDb.Totals totals = db.totals(month + "-01", monthEnd(month));
         LinearLayout summary = column();
         summary.setBackground(shape(WHITE, 12));
-        padding(summary, 14, 8);
+        padding(summary, 12, 7);
         summary.addView(text("本月结余", 12, MUTED, false));
-        summary.addView(amountText(money(totals.balance()), 26, DARK));
-        space(summary, 4);
+        summary.addView(amountText(money(totals.balance()), 23, DARK));
+        space(summary, 3);
         rule(summary, LINE);
-        space(summary, 4);
+        space(summary, 3);
         LinearLayout numbers = row();
         numbers.addView(coloredAmount("收入", totals.income, RED), new LinearLayout.LayoutParams(0, -2, 1));
         numbers.addView(coloredAmount("支出", totals.expense, EXPENSE_COLOR), new LinearLayout.LayoutParams(0, -2, 1));
@@ -472,7 +472,6 @@ public final class MainActivity extends Activity {
         find.setTextSize(24);
         find.setContentDescription("搜索全部流水");
         heading.addView(find, lp(44, 44));
-        heading.addView(assistantShortcut(), lp(49, 44));
         body.addView(heading);
     }
     /**
@@ -492,7 +491,7 @@ public final class MainActivity extends Activity {
         for (LedgerDb.Entry e : entries) {
             if (!e.businessDate.equals(last)) {
                 group = column(); LedgerDb.Totals day = perDay.get(e.businessDate); LinearLayout dayHeader = row();
-                padding(dayHeader, 7, 5);
+                padding(dayHeader, 7, 4);
                 dayHeader.addView(text(dayLabel(e.businessDate), 12, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
                 String summary = (day.income > 0 ? "收入 " + money(day.income) : "") + (day.income > 0 && day.expense > 0 ? " · " : "")
                         + (day.expense > 0 ? "支出 " + money(day.expense) : "");
@@ -501,13 +500,13 @@ public final class MainActivity extends Activity {
             }
             LedgerDb.Category cat = categories.get(e.categoryId);
             LinearLayout line = row();
-            padding(line, 8, 6);
-            line.setMinimumHeight(dp(56));
+            padding(line, 8, 4);
+            line.setMinimumHeight(dp(50));
             if (e.id.equals(savedEntryId)) {
                 line.setBackground(shape(SOFT, 8));
                 highlightedEntry = line;
             }
-            line.addView(categoryBadge(cat, true, false), lp(30, 30));
+            line.addView(categoryBadge(cat, true, false), lp(28, 28));
             String name = cat == null ? "未知分类" : cat.name;
             LinearLayout left = column();
             left.setPadding(dp(10), 0, dp(8), 0);
@@ -517,7 +516,7 @@ public final class MainActivity extends Activity {
                 left.addView(text(name, 11, MUTED, false));
             }
             line.addView(left, new LinearLayout.LayoutParams(0, -2, 1));
-            line.addView(amountText(recordAmount(e), 15, LedgerDb.EXPENSE.equals(e.type) ? DARK : GREEN));
+            line.addView(amountText(recordAmount(e), 14, LedgerDb.EXPENSE.equals(e.type) ? DARK : GREEN));
             line.setOnClickListener(v -> navigate("detail", e.id)); group.addView(line); rule(group, 0xfff7f8fa);
         }
     }
@@ -540,7 +539,7 @@ public final class MainActivity extends Activity {
         padding(hero, 18, 15);
         hero.addView(text(income ? "收入" : "支出", 13, MUTED, false), lp(-2, -2));
         space(hero, 5);
-        hero.addView(amountText((income ? "+" : "−") + money(entry.amountMinor), 28, income ? GREEN : DARK), lp(-2, -2));
+        hero.addView(amountText((income ? "+" : "−") + money(entry.amountMinor), 24, income ? GREEN : DARK), lp(-2, -2));
         space(hero, 9);
         TextView category = text(categoryName, 12, GREEN, false);
         padding(category, 10, 4);
@@ -632,7 +631,7 @@ public final class MainActivity extends Activity {
         toggle.addView(segment("收入", income, () -> { statsType = LedgerDb.INCOME; render(); }), lp(52, 42));
         trendBar.addView(toggle);
         trend.addView(trendBar);
-        trend.addView(amountText(money(total), 26, DARK));
+        trend.addView(amountText(money(total), 23, DARK));
         long days = ChronoUnit.DAYS.between(LocalDate.parse(bounds[0]), LocalDate.parse(bounds[1])) + 1;
         trend.addView(text("日均 " + money(Math.round(total / (double) days)) + " · " + days + " 天", 13, MUTED, false));
         renderStatsChart(trend, rows, bounds, income ? GREEN : CORAL);
@@ -728,7 +727,7 @@ public final class MainActivity extends Activity {
             return true;
         });
         space(trend, 14);
-        trend.addView(chart, lp(-1, 145));
+        trend.addView(chart, lp(-1, 132));
         chatValue(trend, bounds[0], bounds[1]);
         trend.addView(selection);
         LinearLayout data = column();
@@ -1033,8 +1032,8 @@ public final class MainActivity extends Activity {
         compactMenu(options, "分类管理", "", "◇", () -> navigate("categories", null));
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
-                "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n从明细或统计顶部进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.10。流水保存在手机本机。"));
+                "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n从明细或统计右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.11。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -1405,7 +1404,7 @@ public final class MainActivity extends Activity {
         LinearLayout shell = column();
         padding(shell, 16, 0);
         entryCard.addView(shell, new FrameLayout.LayoutParams(-1, -1));
-        TextView title = text(draft.id == null ? "记一笔" : "编辑记录", 19, DARK, true);
+        TextView title = text(draft.id == null ? "记一笔" : "编辑记录", 17, DARK, true);
         title.setGravity(Gravity.CENTER);
         shell.addView(title, lp(-1, 58));
         LinearLayout typeSwitch = row(); typeSwitch.setBackground(shape(FIELD, 14)); padding(typeSwitch, 4, 4);
@@ -1680,7 +1679,7 @@ public final class MainActivity extends Activity {
     private LinearLayout coloredAmount(String label, long minor, int color) {
         LinearLayout group = row();
         group.addView(text(label + "  ", 12, MUTED, false));
-        group.addView(amountText(money(minor), 14, color));
+        group.addView(amountText(money(minor), 13, color));
         return group;
     }
 
@@ -1759,14 +1758,16 @@ public final class MainActivity extends Activity {
     }
 
     /**
-     * 创建明细与统计页标题区的 AI 入口。
+     * 放置明细与统计右下角的悬浮 AI 入口。
      */
-    private TextView assistantShortcut() {
-        TextView shortcut = ghost("✦ AI", this::openAssistant);
-        shortcut.setTextSize(13);
-        shortcut.setTypeface(mediumFace);
-        shortcut.setContentDescription("打开 AI 助手");
-        return shortcut;
+    private void addAssistantFab() {
+        TextView fab = button("✦  AI", true, this::openAssistant);
+        fab.setContentDescription("打开 AI 助手");
+        fab.setBackground(shape(ACTION, 28));
+        fab.setElevation(dp(3));
+        FrameLayout.LayoutParams position = new FrameLayout.LayoutParams(dp(66), dp(48), Gravity.BOTTOM | Gravity.END);
+        position.setMargins(0, 0, dp(20), dp(90));
+        host.addView(fab, position);
     }
 
     /**
@@ -2993,7 +2994,7 @@ public final class MainActivity extends Activity {
         padding(bar, 18, 0);
         bar.setBackgroundColor(TOP);
         setPageStatusBarColor(TOP);
-        bar.addView(text(title, 19, TOP_TEXT, true), new LinearLayout.LayoutParams(0, dp(54), 1));
+        bar.addView(text(title, 17, TOP_TEXT, true), new LinearLayout.LayoutParams(0, dp(50), 1));
         if (isMain()) {
             View eye = eyeButton(TOP_TEXT);
             eye.setBackground(shape(0x75ffffff, 15));
@@ -3010,11 +3011,11 @@ public final class MainActivity extends Activity {
                                      String secondLabel, String secondValue, int secondColor) {
         LinearLayout summary = card();
         summary.setBackground(outline(WHITE, 16, LINE));
-        padding(summary, 16, 13);
+        padding(summary, 14, 10);
         summary.addView(text(label, 13, MUTED, false));
         space(summary, 5);
-        summary.addView(amountText(total, 28, DARK));
-        space(summary, 10);
+        summary.addView(amountText(total, 24, DARK));
+        space(summary, 7);
         LinearLayout columns = row();
         padding(columns, 10, 7);
         columns.setBackground(shape(FIELD, 11));
@@ -3025,9 +3026,9 @@ public final class MainActivity extends Activity {
             if (i == 1) column.setPadding(dp(12), 0, 0, 0);
             column.addView(text(labels[i], 13, MUTED, false));
             space(column, 3);
-            TextView amount = amountText(values[i], 16, colors[i]);
+            TextView amount = amountText(values[i], 14, colors[i]);
             amount.setSingleLine(true);
-            amount.setAutoSizeTextTypeUniformWithConfiguration(10, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+            amount.setAutoSizeTextTypeUniformWithConfiguration(10, 14, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
             column.addView(amount, lp(-1, 23));
             columns.addView(column, new LinearLayout.LayoutParams(0, -2, 1));
             if (i == 0) {
@@ -3174,6 +3175,7 @@ public final class MainActivity extends Activity {
         if (records.isEmpty()) entryList(heading, records);
         attachRecordList(shell, new MonthScroll(), heading, records);
         renderTabs(shell);
+        addAssistantFab();
     }
 
     /**
@@ -3216,12 +3218,12 @@ public final class MainActivity extends Activity {
     private void compactMenu(LinearLayout parent, String label, String caption, String glyph, Runnable action) {
         if (parent.getChildCount() > 0) rule(parent, 0xffedf1ee);
         LinearLayout line = row();
-        padding(line, 14, 7);
+        padding(line, 14, 5);
         if (!glyph.isEmpty()) {
             TextView icon = text(glyph, 15, GREEN, false);
             icon.setGravity(Gravity.CENTER);
             icon.setBackground(shape(SOFT, 13));
-            line.addView(icon, lp(34, 34));
+            line.addView(icon, lp(30, 30));
         }
         LinearLayout labels = column();
         labels.setPadding(glyph.isEmpty() ? 0 : dp(10), 0, dp(4), 0);
@@ -3230,7 +3232,7 @@ public final class MainActivity extends Activity {
         line.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
         line.addView(text("›", 17, MUTED, false));
         line.setOnClickListener(view -> action.run());
-        line.setMinimumHeight(dp(glyph.isEmpty() ? 48 : 56));
+        line.setMinimumHeight(dp(48));
         parent.addView(line, lp(-1, -2));
     }
 
@@ -3394,13 +3396,13 @@ public final class MainActivity extends Activity {
             if (container == null) {
                 container = column();
                 LinearLayout header = row();
-                padding(header, 7, 5);
+                padding(header, 7, 4);
                 header.addView(text("", 12, MUTED, false), new LinearLayout.LayoutParams(0, -2, 1));
                 header.addView(text("", 11, MUTED, false));
                 container.addView(header);
                 rule(container, LINE);
             }
-            container.setPadding(dp(16), position == 0 ? 0 : dp(8), dp(16), 0);
+            container.setPadding(dp(16), position == 0 ? 0 : dp(6), dp(16), 0);
             LinearLayout line = (LinearLayout) container.getChildAt(0);
             ((TextView) line.getChildAt(0)).setText(dayLabel(date));
             LedgerDb.Totals day = totals.get(date);
@@ -3418,9 +3420,9 @@ public final class MainActivity extends Activity {
                 container = column();
                 padding(container, 16, 0);
                 LinearLayout line = row();
-                padding(line, 8, 6);
-                line.setMinimumHeight(dp(56));
-                line.addView(new FrameLayout(MainActivity.this), lp(30, 30));
+                padding(line, 8, 4);
+                line.setMinimumHeight(dp(50));
+                line.addView(new FrameLayout(MainActivity.this), lp(28, 28));
                 LinearLayout labels = column();
                 labels.setPadding(dp(10), 0, dp(8), 0);
                 labels.addView(recordLabel(""));
@@ -3429,7 +3431,7 @@ public final class MainActivity extends Activity {
                 sublabel.setPadding(0, dp(2), 0, 0);
                 labels.addView(sublabel);
                 line.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
-                line.addView(amountText("", 15, DARK));
+                line.addView(amountText("", 14, DARK));
                 container.addView(line);
                 rule(container, 0xfff7f8fa);
             }
@@ -3704,7 +3706,7 @@ public final class MainActivity extends Activity {
      * 设置列表备注的字重与可读行数。
      */
     private TextView recordLabel(String value) {
-        TextView label = text(value, 14, DARK, false);
+        TextView label = text(value, 13, DARK, false);
         label.setIncludeFontPadding(false);
         label.setMaxLines(2);
         label.setEllipsize(android.text.TextUtils.TruncateAt.END);
