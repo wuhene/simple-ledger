@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { entryTokens, latitudeWindow, matchScore, noteWithPlace, withinDistance } from "./ledger-search.js";
+import { appendManualPlace, entryTokens, latitudeWindow, matchScore, noteWithPlace, withinDistance } from "./ledger-search.js";
 
 const point = (latitude, longitude) => ({ latitude, longitude, accuracy: 30, capturedAt: "2026-11-26T04:00:00Z" });
 
@@ -38,4 +38,13 @@ test("地点追加去重且完整保留选择的地点", () => {
   const result = noteWithPlace("餐".repeat(200), "王府井");
   assert.equal([...result].length, 200);
   assert.ok(result.endsWith(" · 王府井"));
+});
+
+test("手动选地点换行追加，并保留已到字数上限的备注", () => {
+  assert.equal(appendManualPlace("午餐", "王府井"), "午餐\n王府井");
+  assert.equal(appendManualPlace("午餐\n", "王府井"), "午餐\n王府井");
+  assert.equal(appendManualPlace("午餐\n王府井", "王府井"), "午餐\n王府井");
+  assert.equal(appendManualPlace("", "王府井"), "王府井");
+  assert.equal(appendManualPlace("餐".repeat(200), "王府井"), null);
+  assert.equal(appendManualPlace("旧备注", ""), "旧备注");
 });

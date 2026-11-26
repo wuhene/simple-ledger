@@ -204,4 +204,16 @@ final class LedgerLocation {
         for (int i = 0; clues != null && i < Math.min(clues.length(), 11); i++) merged.put(clues.opt(i));
         return merged;
     }
+
+    /**
+     * 换行追加手动选择的地点并保留已有备注。
+     */
+    static String appendManualPlace(String note, String place) {
+        if (place.isEmpty() || note.isEmpty()) return note + place;
+        for (String line : note.split("\\R")) {
+            if (line.trim().equals(place)) return note;
+        }
+        String combined = note + (note.endsWith("\n") ? "" : "\n") + place;
+        return combined.codePointCount(0, combined.length()) <= 200 ? combined : null;
+    }
 }

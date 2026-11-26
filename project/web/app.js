@@ -39,7 +39,7 @@ import {
 } from "./storage.js";
 import { createAssistant } from "./assistant.js";
 import { categoryIconFills, categoryIconPaths } from "./category-icons.js";
-import { cleanTerms, cluesWithPlace, currentLedgerLocation, noteWithPlace } from "./ledger-search.js";
+import { appendManualPlace, cleanTerms, cluesWithPlace, currentLedgerLocation } from "./ledger-search.js";
 import { rollupAchievements, summarizeRollups } from "./ledger-rollups.js";
 
 const $ = (s) => document.querySelector(s),
@@ -281,7 +281,7 @@ function entryDock(d) {
   const keys = ["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "日期"].map((k) => k === "日期" ? `<button class="op key-date" data-action="pick-date" aria-label="选择记账日期，当前${E(fullDate(d.date))}">${uiIcon("calendar")}<span>${dateLabel}</span></button>` : `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}" aria-label="${k === "⌫" ? "退格" : k}">${k}</button>`).join("");
   return `<section class="entry-dock ${state.entryDockEntering ? "entry-dock-enter" : ""}" aria-label="记账输入">
     <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div></div>
-    <div class="entry-location"><textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
+    <div class="entry-location"><textarea id="entryNote" class="entry-note" rows="${Math.min(4, d.note.split("\n").length)}" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
     <button class="plain place-picker-icon" data-action="entry-location" aria-label="选择地点" aria-pressed="${Boolean(d.location)}">${uiIcon("location")}</button></div>
     <div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></section>`;
 }
@@ -1053,7 +1053,9 @@ function changeEntryLocation() {
     if (state.entry !== draft) return;
     draft.location = selected?.location || null;
     if (selected?.name) {
-      draft.note = noteWithPlace(draft.note, selected.name);
+      const combined = appendManualPlace(draft.note, selected.name);
+      if (combined === null) toast("备注已达字数限制，已保留原文。可缩短备注后重新选地点。");
+      else draft.note = combined;
       draft.clues = cluesWithPlace(draft.clues, selected.name);
     }
   } });

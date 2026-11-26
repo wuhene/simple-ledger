@@ -44,7 +44,6 @@ $versionCode = [regex]::Match($gradleConfig, 'versionCode\s+(\d+)').Groups[1].Va
 $versionName = [regex]::Match($gradleConfig, "versionName\s+'([^']+)'").Groups[1].Value
 if (-not $versionCode -or -not $versionName) { throw '无法读取 Android 版本号。' }
 $applicationId = if ($PrivateLedgerArchive) { 'com.wuhene.simpleledger.privateledger' } elseif ($Acceptance) { 'com.wuhene.simpleledger.acceptance' } else { 'com.wuhene.simpleledger' }
-if ($PrivateLedgerArchive) { $sourceManifest = $sourceManifest.Replace('android:label="@string/app_name"', 'android:label="爱记账·私人账本"') }
 $manifestHead = '<manifest xmlns:android="http://schemas.android.com/apk/res/android"'
 $sourceManifest.Replace("$manifestHead>", "$manifestHead package=`"$applicationId`" android:versionCode=`"$versionCode`" android:versionName=`"$versionName`">").Replace('${applicationId}', $applicationId) | Set-Content -Encoding utf8 $generatedManifest
 $link = @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35','-A',(Join-Path $projectRoot 'app\src\main\assets'))

@@ -1024,7 +1024,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.7。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.8。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -1927,9 +1927,11 @@ public final class MainActivity extends Activity {
         amountView.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         amountRow.addView(amountView, new LinearLayout.LayoutParams(0, dp(44), 1.35f));
         dock.addView(amountRow);
-        noteView = editField("备注  添加一点说明（可选）", draft.note, 200, true);
+        noteView = editField("备注  添加一点说明（可选）", draft.note, Math.max(200, draft.note.length()), false);
+        noteView.setMinHeight(dp(44));
+        noteView.setMaxLines(4);
         LinearLayout location = row();
-        location.addView(noteView, new LinearLayout.LayoutParams(0, dp(44), 1));
+        location.addView(noteView, new LinearLayout.LayoutParams(0, -2, 1));
         location.addView(placeIcon(draft.location != null), lp(44, 44));
         dock.addView(location);
         LinearLayout keypad = column();
@@ -3630,11 +3632,13 @@ public final class MainActivity extends Activity {
             render();
         } else {
             preserveNote();
-            target.note = LedgerLocation.noteWithPlace(target.note, name);
+            String combined = LedgerLocation.appendManualPlace(target.note, name);
+            if (combined != null) target.note = combined;
             target.clues = LedgerLocation.cluesWithPlace(target.clues, name);
             target.location = point;
             dialog.dismiss();
             buildEntry();
+            if (combined == null) success("备注已达字数限制，已保留原文。可缩短备注后重新选地点。");
         }
     }
 }

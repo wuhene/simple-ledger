@@ -118,3 +118,10 @@ export function cluesWithPlace(clues, place) {
   if (!place || existing.some(clue => ["城市", "区县", "地点"].includes(clue.type))) return existing;
   return cleanClues([{ type: "地点", value: place }, ...existing]);
 }
+
+export function appendManualPlace(note, place) {
+  if (!place || !note) return note + place;
+  if (note.split(/\r?\n/).some(line => line.trim() === place)) return note;
+  const combined = note + (note.endsWith("\n") ? "" : "\n") + place;
+  return [...combined].length <= 200 ? combined : null;
+}
