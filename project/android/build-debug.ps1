@@ -1,12 +1,18 @@
 param(
     [string]$SdkPath = $env:ANDROID_HOME,
     [string]$JdkPath = $env:JAVA_HOME,
-    [switch]$Acceptance
+    [switch]$Acceptance,
+    [string]$PrivateLedgerArchive
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $projectRoot '..\..')).Path
+if ($Acceptance -and $PrivateLedgerArchive) { throw '验收版和私人账本版不能同时打包。' }
+if ($PrivateLedgerArchive) {
+    $archive = Get-Item -LiteralPath $PrivateLedgerArchive
+    if ($archive.PSIsContainer -or $archive.Extension -ne '.zip') { throw '请提供爱记账分月 ZIP 备份。' }
+}
 if (-not $SdkPath) { $SdkPath = Join-Path $repoRoot '.tools\android-sdk' }
 if (-not $JdkPath -or $JdkPath -match 'jdk1\.8|jdk-?8') {
     $localJdk = Get-ChildItem (Join-Path $repoRoot '.tools\jdk17') -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -18,7 +24,7 @@ if (-not (Test-Path (Join-Path $SdkPath 'platforms\android-35\android.jar'))) { 
 $env:JAVA_HOME = $JdkPath
 $tools = Join-Path $SdkPath 'build-tools\35.0.0'
 $androidJar = Join-Path $SdkPath 'platforms\android-35\android.jar'
-$build = Join-Path $projectRoot $(if ($Acceptance) { 'app\build\manual-acceptance' } else { 'app\build\manual' })
+$build = Join-Path $projectRoot $(if ($PrivateLedgerArchive) { 'app\build\manual-private' } elseif ($Acceptance) { 'app\build\manual-acceptance' } else { 'app\build\manual' })
 $classes = Join-Path $build 'classes'
 $dex = Join-Path $build 'dex'
 New-Item -ItemType Directory -Force -Path $classes, $dex | Out-Null
@@ -37,12 +43,18 @@ $gradleConfig = Get-Content -Raw (Join-Path $projectRoot 'app\build.gradle')
 $versionCode = [regex]::Match($gradleConfig, 'versionCode\s+(\d+)').Groups[1].Value
 $versionName = [regex]::Match($gradleConfig, "versionName\s+'([^']+)'").Groups[1].Value
 if (-not $versionCode -or -not $versionName) { throw '无法读取 Android 版本号。' }
-$applicationId = if ($Acceptance) { 'com.wuhene.simpleledger.acceptance' } else { 'com.wuhene.simpleledger' }
+$applicationId = if ($PrivateLedgerArchive) { 'com.wuhene.simpleledger.privateledger' } elseif ($Acceptance) { 'com.wuhene.simpleledger.acceptance' } else { 'com.wuhene.simpleledger' }
+if ($PrivateLedgerArchive) { $sourceManifest = $sourceManifest.Replace('android:label="@string/app_name"', 'android:label="爱记账·私人账本"') }
 $manifestHead = '<manifest xmlns:android="http://schemas.android.com/apk/res/android"'
 $sourceManifest.Replace("$manifestHead>", "$manifestHead package=`"$applicationId`" android:versionCode=`"$versionCode`" android:versionName=`"$versionName`">").Replace('${applicationId}', $applicationId) | Set-Content -Encoding utf8 $generatedManifest
 $link = @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35','-A',(Join-Path $projectRoot 'app\src\main\assets'))
 $link += @('-A', (Join-Path $projectRoot '..\shared\assets'))
-if ($Acceptance) {
+if ($PrivateLedgerArchive) {
+    $privateAssets = Join-Path $build 'private-assets'
+    New-Item -ItemType Directory -Force -Path $privateAssets | Out-Null
+    Copy-Item -LiteralPath $archive.FullName -Destination (Join-Path $privateAssets 'private-ledger.zip')
+    $link += @('-A', $privateAssets)
+} elseif ($Acceptance) {
     $acceptanceAssets = Join-Path $projectRoot 'app\src\acceptance\assets'
     if (-not (Test-Path (Join-Path $acceptanceAssets 'acceptance-ledger.zip'))) { throw '缺少独立验收包的合成账本。' }
     $link += @('-A', $acceptanceAssets)
@@ -57,7 +69,9 @@ $key = Join-Path $repoRoot '.tools\debug.keystore'
 if (-not (Test-Path $key)) {
     Run (Join-Path $JdkPath 'bin\keytool.exe') @('-genkeypair','-keystore',$key,'-alias','androiddebugkey','-storepass','android','-keypass','android','-dname','CN=Android Debug,O=Android,C=US','-keyalg','RSA','-keysize','2048','-validity','10000')
 }
-$apk = Join-Path $projectRoot $(if ($Acceptance) { 'AiLedger-acceptance.apk' } else { 'SimpleLedger-debug.apk' })
+$apk = if ($PrivateLedgerArchive) { Join-Path $build 'AiLedger-private.apk' } else {
+    Join-Path $projectRoot $(if ($Acceptance) { 'AiLedger-acceptance.apk' } else { 'SimpleLedger-debug.apk' })
+}
 Run (Join-Path $tools 'apksigner.bat') @('sign','--ks',$key,'--ks-key-alias','androiddebugkey','--ks-pass','pass:android','--key-pass','pass:android','--out',$apk,(Join-Path $build 'aligned.apk'))
 Run (Join-Path $tools 'apksigner.bat') @('verify','--verbose',$apk)
 Get-FileHash -Algorithm SHA256 $apk | Format-List

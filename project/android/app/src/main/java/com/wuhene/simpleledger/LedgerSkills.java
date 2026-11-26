@@ -62,9 +62,11 @@ final class LedgerSkills {
     static JSONObject group(List<LedgerDb.Entry> rows, String dimension, String order, int limit) {
         Map<String, JSONObject> counts = new LinkedHashMap<>();
         int covered = 0;
+        JSONObject dateOnly = LedgerAssistant.object("type", "入账时间来源", "value", "只有账单日期");
         for (LedgerDb.Entry entry : rows) {
             Map<String, String> labels = new LinkedHashMap<>();
             if ("入账小时".equals(dimension)) {
+                if (LedgerIndex.hasClue(entry.clues, dateOnly)) continue;
                 try {
                     int hour = Instant.parse(entry.createdAt).atZone(ZoneId.systemDefault()).getHour();
                     labels.put(String.valueOf(hour), String.format(Locale.ROOT, "%02d:00", hour));

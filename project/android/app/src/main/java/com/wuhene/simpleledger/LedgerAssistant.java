@@ -48,6 +48,7 @@ final class LedgerAssistant {
     volatile String stage = "";
     private final Context locationContext;
     private JSONObject pickedPlace;
+    private final LedgerModelSettings modelSettings;
 
     /**
      * 载入共享提示词和最近会话。
@@ -55,6 +56,10 @@ final class LedgerAssistant {
     LedgerAssistant(Context context, LedgerDb db) {
         this.db = db;
         locationContext = context.getApplicationContext();
+        modelSettings = new LedgerModelSettings(locationContext);
+        base = modelSettings.base();
+        model = modelSettings.model();
+        key = modelSettings.secret();
         try (InputStream stream = context.getAssets().open("assistant-prompt.txt");
              InputStream skills = context.getAssets().open("ledger-skill-catalog.txt")) {
             prompt = readText(stream, 40000) + "\n\n" + readText(skills, 20000);
@@ -810,6 +815,7 @@ final class LedgerAssistant {
         db = source.db;
         prompt = source.prompt;
         locationContext = source.locationContext;
+        modelSettings = null;
     }
 
     /**
@@ -822,7 +828,7 @@ final class LedgerAssistant {
     }
 
     /**
-     * 校验并保存本次运行的模型设置。
+     * 校验并保存当前安装的模型设置。
      */
     synchronized void saveConfiguration(String address, String name, String secret) throws Exception {
         String nextBase = address.trim().replaceFirst("/+$", "");
@@ -838,6 +844,7 @@ final class LedgerAssistant {
         if (nextModel.isEmpty() || nextModel.length() > 160) throw new IllegalArgumentException("请填写有效的模型名称");
         if (nextKey.contains("\r") || nextKey.contains("\n")) throw new IllegalArgumentException("API Key 格式无效");
         if (nextKey.isEmpty() && nextBase.equals(base)) nextKey = key;
+        if (modelSettings != null) modelSettings.save(nextBase, nextModel, nextKey);
         if (!nextBase.equals(base) || !nextModel.equals(model) || !nextKey.equals(key)) cancel();
         base = nextBase;
         model = nextModel;
@@ -860,6 +867,7 @@ final class LedgerAssistant {
      * 清除当前运行期间保存的模型凭据。
      */
     synchronized void clearConfiguration() {
+        if (modelSettings != null) modelSettings.clear();
         cancel();
         base = model = key = "";
     }

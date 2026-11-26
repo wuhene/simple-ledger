@@ -2,6 +2,7 @@ const maxClues = 12;
 const fold = value => value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
 const clueValue = ({ type, value }) => {
   const text = fold(value);
+  if (fold(type) === "省份" && text.length > 2) return text.replace(/省$/u, "");
   return ["城市", "入账城市"].includes(fold(type)) && text.length > 2 ? text.replace(/市$/u, "") : text;
 };
 

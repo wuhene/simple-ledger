@@ -26,6 +26,12 @@ test("半径筛选保留异经线近点，排除跨城和无坐标记录", () =>
   assert.equal(latitudeWindow(89.99, 2)[1], 90);
 });
 
+test("省级补标可用省名精确检索并保持城市独立", () => {
+  const entry = { clues: [{ type: "省份", value: "福建" }] };
+  assert.ok(matchScore(entry, [], [{ type: "省份", value: "福建省" }]) >= 0);
+  assert.equal(matchScore(entry, [], [{ type: "城市", value: "福州" }]), -1);
+});
+
 test("地点追加去重且完整保留选择的地点", () => {
   assert.equal(noteWithPlace("午餐", "王府井"), "午餐 · 王府井");
   assert.equal(noteWithPlace("午餐 · 王府井", "王府井"), "午餐 · 王府井");

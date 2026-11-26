@@ -1024,7 +1024,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.6。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.7。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -2238,7 +2238,7 @@ public final class MainActivity extends Activity {
         LinearLayout form = card();
         EditText base = assistantSettingField(form, "API 地址", "https://api.example.com/v1", assistant.base);
         EditText model = assistantSettingField(form, "模型 ID", "填写服务商模型 ID", assistant.model);
-        EditText key = assistantSettingField(form, "API Key", assistant.key.isEmpty() ? "按服务商要求填写" : "已在本次运行中填写", "");
+        EditText key = assistantSettingField(form, "API Key", assistant.key.isEmpty() ? "按服务商要求填写" : "已保存 · 留空沿用", "");
         for (EditText field : new EditText[]{base, model, key}) field.setBackground(outline(WHITE, 12, LINE));
         key.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         form.addView(text("AI 记账模式", 14, DARK, true));
@@ -2256,7 +2256,7 @@ public final class MainActivity extends Activity {
         form.addView(attachLocation);
         form.addView(text("和你说的消费地点分别记录。定位不可用时仍可入账。", 13, MUTED, false));
         space(form, 10);
-        form.addView(text("模型会收到输入、必要的会话上下文和相关汇总。原始流水、备注和定位由本机处理。配置在本次运行中有效。", 13, MUTED, false));
+        form.addView(text("模型会收到输入、必要的会话上下文和相关汇总。配置仅保存在本机，API Key 加密存储。", 13, MUTED, false));
         space(form, 14);
         LinearLayout actions = row();
         TextView status = text("", 13, MUTED, false);
@@ -2295,11 +2295,13 @@ public final class MainActivity extends Activity {
         testSize.leftMargin = dp(7);
         actions.addView(testButton, testSize);
         actions.addView(ghost("清除配置", () -> {
-            stopAssistant(false);
-            assistant.clearConfiguration();
-            hideKeyboard();
-            render();
-            success("模型配置已清除");
+            try {
+                stopAssistant(false);
+                assistant.clearConfiguration();
+                hideKeyboard();
+                render();
+                success("模型配置已清除");
+            } catch (IllegalStateException failure) { error(failure); }
         }), new LinearLayout.LayoutParams(0, dp(48), 1));
         form.addView(actions);
         form.addView(status);
@@ -2951,16 +2953,18 @@ public final class MainActivity extends Activity {
     }
 
     /**
-     * 在独立验收包的空账本首次启动时导入合成记录。
+     * 在独立安装包的空账本首次启动时导入内置流水。
      */
     private void prepareAcceptanceLedger(TextView loading) throws Exception {
-        if (!getPackageName().endsWith(".acceptance")) return;
+        boolean privateLedger = getPackageName().endsWith(".privateledger");
+        if (!privateLedger && !getPackageName().endsWith(".acceptance")) return;
         synchronized (MainActivity.class) {
             android.content.SharedPreferences preferences = getPreferences(MODE_PRIVATE);
             if (preferences.getBoolean("acceptanceFixtureReady", false)) return;
             if (db.entryCount() == 0) {
-                runOnUiThread(() -> loading.setText("首次启动正在载入 10 万笔验收流水\n请稍候…"));
-                try (InputStream archive = getAssets().open("acceptance-ledger.zip")) {
+                runOnUiThread(() -> loading.setText(privateLedger ? "首次启动正在载入你的历史流水\n请稍候…" :
+                        "首次启动正在载入 10 万笔验收流水\n请稍候…"));
+                try (InputStream archive = getAssets().open(privateLedger ? "private-ledger.zip" : "acceptance-ledger.zip")) {
                     db.importJson(LedgerBackup.read(archive));
                 }
             }

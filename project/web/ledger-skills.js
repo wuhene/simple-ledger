@@ -25,6 +25,7 @@ export function groupLedger(rows, dimension, order, limit) {
   for (const entry of rows) {
     const values = new Map();
     if (dimension === "入账小时") {
+      if (entry.clues?.some(clue => clue.type === "入账时间来源" && clue.value === "只有账单日期")) continue;
       const hour = new Date(entry.createdAt).getHours();
       if (Number.isFinite(hour)) values.set(String(hour), String(hour).padStart(2, "0") + ":00");
     } else {

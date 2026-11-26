@@ -118,7 +118,7 @@ final class LedgerIndex {
     /**
      * 核对一对开放类型和线索值。
      */
-    private static boolean hasClue(JSONArray clues, JSONObject filter) {
+    static boolean hasClue(JSONArray clues, JSONObject filter) {
         if (clues == null) return false;
         String type = fold(filter.optString("type"));
         String value = clueValue(filter);
@@ -135,6 +135,9 @@ final class LedgerIndex {
     private static String clueValue(JSONObject clue) {
         String value = fold(clue.optString("value"));
         String type = fold(clue.optString("type"));
+        if ("省份".equals(type) && value.length() > 2 && value.endsWith("省")) {
+            return value.substring(0, value.length() - 1);
+        }
         if (("城市".equals(type) || "入账城市".equals(type)) && value.length() > 2 && value.endsWith("市")) {
             return value.substring(0, value.length() - 1);
         }
