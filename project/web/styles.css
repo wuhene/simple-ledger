@@ -1582,3 +1582,6 @@ body::-webkit-scrollbar,
 .theme-swatch span:first-child { background: var(--action); }
 .theme-swatch span:last-child { background: var(--top-surface); }
 .theme-picker .error:empty { display: none; }
+.ai-skill-trace { margin: 4px 0 10px; color: var(--muted); font-size: .82rem; }
+.ai-skill-trace summary { cursor: pointer; padding: 4px 0; }
+.ai-skill-trace ol { padding-left: 24px; margin: 4px 0; line-height: 1.6; }

@@ -41,6 +41,7 @@ $applicationId = if ($Acceptance) { 'com.wuhene.simpleledger.acceptance' } else 
 $manifestHead = '<manifest xmlns:android="http://schemas.android.com/apk/res/android"'
 $sourceManifest.Replace("$manifestHead>", "$manifestHead package=`"$applicationId`" android:versionCode=`"$versionCode`" android:versionName=`"$versionName`">").Replace('${applicationId}', $applicationId) | Set-Content -Encoding utf8 $generatedManifest
 $link = @('link','-o',(Join-Path $build 'unsigned.apk'),'-I',$androidJar,'--manifest',$generatedManifest,'--min-sdk-version','26','--target-sdk-version','35','-A',(Join-Path $projectRoot 'app\src\main\assets'))
+$link += @('-A', (Join-Path $projectRoot '..\shared\assets'))
 if ($Acceptance) {
     $acceptanceAssets = Join-Path $projectRoot 'app\src\acceptance\assets'
     if (-not (Test-Path (Join-Path $acceptanceAssets 'acceptance-ledger.zip'))) { throw '缺少独立验收包的合成账本。' }

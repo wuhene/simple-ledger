@@ -31,7 +31,7 @@ import java.util.regex.Pattern;
  * @date 2026/11/25
  */
 final class LedgerAssistant {
-    private static final String BLOCKS = "|entries|totals|categories|comparison|";
+    private static final String BLOCKS = "|entries|totals|categories|comparison|groupRank|";
     private static final Pattern RANK = Pattern.compile("(?:前|top\\s*)([0-9]{1,3}|[一二三四五六七八九]?十[一二三四五六七八九]?|[一二三四五六七八九])(?=\\s*(?:[笔条项名]|个(?!月|年|星)|[。？！]|$))", Pattern.CASE_INSENSITIVE);
     private final LedgerDb db;
     private final String prompt;
@@ -43,14 +43,16 @@ final class LedgerAssistant {
     volatile String base = "", model = "", key = "";
     String input = "";
     private int persistedMessages;
+    volatile String stage = "";
 
     /**
      * 载入共享提示词和最近会话。
      */
     LedgerAssistant(Context context, LedgerDb db) {
         this.db = db;
-        try (InputStream stream = context.getAssets().open("assistant-prompt.txt")) {
-            prompt = readText(stream, 40000);
+        try (InputStream stream = context.getAssets().open("assistant-prompt.txt");
+             InputStream skills = context.getAssets().open("ledger-skill-catalog.txt")) {
+            prompt = readText(stream, 40000) + "\n\n" + readText(skills, 20000);
         } catch (Exception error) {
             throw new IllegalStateException("无法读取助手提示词", error);
         }
@@ -149,6 +151,7 @@ final class LedgerAssistant {
      * 解析自然语言并追加草稿、回复或本地数据卡。
      */
     void finish(String text, int token) throws Exception {
+        stage = "正在理解你的问题";
         JSONObject conversation;
         JSONObject previous;
         JSONObject oldPending;
@@ -178,13 +181,15 @@ final class LedgerAssistant {
                 nextDraft = object("type", type, "date", date, "amount", LedgerMath.money(minor).replace(",", ""),
                         "note", note, "sourceText", source, "categoryId", categoryId, "clues", cleanClues(intent.optJSONArray("clues")));
                 item = textItem(intent.optString("text", "识别到一笔记录，请核对后入账。"));
+                put(item, "steps", new JSONArray().put("生成记账草稿 · 等待确认"));
                 break;
             }
             case "search": case "stats": case "insight": {
                 nextQuery = normalizeQuery(intent, text);
-                JSONObject snapshot = query(nextQuery);
+                JSONObject snapshot = query(nextQuery, token);
                 JSONArray blocks = fallback(nextQuery, snapshot);
-                if (!db.hideAmounts() && !"search".equals(kind) && nextQuery.optInt("limit") == 0) {
+                if (!db.hideAmounts() && nextQuery.optInt("limit") == 0 && token == generation) {
+                    stage = "正在整理查询结果";
                     try {
                         JSONObject analysis = object("task", "analyze", "text", text, "facts", modelFacts(snapshot.optJSONObject("facts")),
                                 "recentTurns", conversation.optJSONArray("recentTurns"), "resultRefs", conversation.optJSONArray("resultRefs"));
@@ -194,7 +199,10 @@ final class LedgerAssistant {
                         }
                     } catch (Exception ignored) { /* Local facts remain available. */ }
                 }
-                item = object("kind", "answer", "blocks", blocks, "snapshot", snapshot, "question", text);
+                ensureBlock(blocks, "groupRank", snapshot.has("groupRank"));
+                ensureBlock(blocks, "comparison", snapshot.optJSONObject("facts").has("baseline"));
+                ensureBlock(blocks, "entries", "search".equals(kind) && snapshot.optJSONArray("entries").length() > 0);
+                item = object("kind", "answer", "blocks", blocks, "snapshot", snapshot, "question", text, "steps", snapshot.optJSONArray("steps"));
                 break;
             }
             case "result-dates": case "result-follow-up": {
@@ -215,11 +223,12 @@ final class LedgerAssistant {
                     if (!isBlock(view)) throw new IllegalArgumentException("不支持的账本视图");
                     nextQuery = new JSONObject(nextQuery.toString()).put("view", view);
                     if (!"entries".equals(view)) nextQuery.put("limit", 0).put("order", "");
-                    snapshot = query(nextQuery);
+                    if (!"groupRank".equals(view)) nextQuery.remove("groupBy");
+                    snapshot = query(nextQuery, token);
                     blocks = fallback(nextQuery, snapshot);
                 }
                 item = object("kind", "answer", "blocks", blocks, "snapshot", snapshot, "question", source.optString("question"),
-                        "forceYear", "result-dates".equals(kind));
+                        "forceYear", "result-dates".equals(kind), "steps", "result-dates".equals(kind) ? null : snapshot.optJSONArray("steps"));
                 break;
             }
             case "clarify":
@@ -432,12 +441,14 @@ final class LedgerAssistant {
      */
     private JSONObject normalizeQuery(JSONObject intent, String text) {
         String kind = intent.optString("kind"), order = intent.optString("order"), view = intent.optString("view");
+        String groupBy = clip(java.text.Normalizer.normalize(intent.optString("groupBy"), java.text.Normalizer.Form.NFKC).trim(), 24);
         int limit = "amount-desc".equals(order) ? Math.min(50, Math.max(1, intent.optInt("limit", 10))) : 0;
         Matcher rank = RANK.matcher(text);
         if (rank.find()) limit = rankNumber(rank.group(1));
         JSONArray terms = intent.optJSONArray("terms");
         JSONArray filters = cleanClues(intent.optJSONArray("filters"));
-        boolean full = limit > 0 || "search".equals(kind) || filters.length() > 0 || (terms != null && terms.length() > 0);
+        JSONArray programWords = LedgerSkills.programTerms(text);
+        boolean full = limit > 0 || !groupBy.isEmpty() || "search".equals(kind) || filters.length() > 0 || (terms != null && terms.length() > 0);
         String start = intent.optString("start", full ? "1900-01-01" : LedgerMath.month(LedgerMath.today()) + "-01");
         String end = intent.optString("end", LedgerMath.today());
         LocalDate first = LocalDate.parse(start), last = LocalDate.parse(end), today = LocalDate.parse(LedgerMath.today());
@@ -448,10 +459,14 @@ final class LedgerAssistant {
         if (limit > 0) { order = "amount-desc"; view = "entries"; }
         if ("search".equals(kind)) {
             view = "entries";
-            if (filters.length() == 0 && (terms == null || terms.length() == 0)) throw new IllegalArgumentException("请提供查找的关键词");
+            if (filters.length() == 0 && (terms == null || terms.length() == 0) && programWords.length() == 0) throw new IllegalArgumentException("请提供查找的关键词");
         }
+        if (!groupBy.isEmpty()) { view = "groupRank"; order = ""; limit = 0; }
         return object("kind", kind, "start", first.toString(), "end", last.toString(), "metric", metric,
                 "category", clip(intent.optString("category"), 12), "terms", terms, "filters", filters, "order", order,
+                "programTerms", programWords, "matchText", intent.optBoolean("matchText") || (!intent.has("matchText") && groupBy.isEmpty() && terms != null && terms.length() > 0), "groupBy", groupBy,
+                "groupOrder", "amount".equals(intent.optString("groupOrder")) ? "amount" : "count",
+                "groupLimit", Math.max(1, Math.min(50, intent.optInt("groupLimit", 10))),
                 "limit", limit, "view", isBlock(view) ? view : "", "compareStart", intent.optString("compareStart"), "compareEnd", intent.optString("compareEnd"));
     }
 
@@ -471,7 +486,7 @@ final class LedgerAssistant {
     /**
      * 在本机计算统计事实、分类排行及显示用流水。
      */
-    private JSONObject query(JSONObject query) {
+    private JSONObject query(JSONObject query, int token) {
         String start = query.optString("start"), end = query.optString("end"), category = query.optString("category"),
                 metric = query.optString("metric"), type = "income".equals(metric) ? LedgerDb.INCOME : LedgerDb.EXPENSE;
         String typeFilter = "overview".equals(metric) ? null : type;
@@ -484,7 +499,14 @@ final class LedgerAssistant {
         JSONArray filters = query.optJSONArray("filters");
         Map<String, String> names = new HashMap<>();
         for (LedgerDb.Category cat : db.categories(null, true)) names.put(cat.id, cat.name);
-        List<LedgerDb.Entry> rows = scoped(start, end, typeFilter, category, names, terms, filters);
+        JSONArray steps = new JSONArray();
+        String dimension = query.optString("groupBy");
+        boolean useText = "search".equals(query.optString("kind")) || query.optBoolean("matchText")
+                || dimension.isEmpty() && category.isEmpty() && (filters == null || filters.length() == 0) && !terms.isEmpty();
+        JSONArray programWords = query.optJSONArray("programTerms");
+        addStep(token, steps, "查流水 · " + (useText ? "双路关键词取并集" : "按条件查询完整范围"));
+        List<LedgerDb.Entry> rows = scoped(start, end, typeFilter, category, names, terms, filters, programWords, useText, !dimension.isEmpty());
+        addStep(token, steps, "汇总账本 · " + rows.size() + " 笔符合条件");
         long income = 0, expense = 0, largest = 0, sideTotal = 0;
         Map<String, Long> byCategory = new HashMap<>();
         for (LedgerDb.Entry entry : rows) {
@@ -534,7 +556,8 @@ final class LedgerAssistant {
             b = LocalDate.parse(start).minusDays(1).toString();
         }
         if (LedgerMath.validDate(a) && LedgerMath.validDate(b) && a.compareTo(b) <= 0) {
-            List<LedgerDb.Entry> prior = scoped(a, b, typeFilter, category, names, terms, filters);
+            addStep(token, steps, "对比账期 · " + a + " 至 " + b);
+            List<LedgerDb.Entry> prior = scoped(a, b, typeFilter, category, names, terms, filters, programWords, useText, false);
             long previousIncome = 0, previousExpense = 0;
             Set<String> dates = new LinkedHashSet<>();
             for (LedgerDb.Entry entry : prior) {
@@ -545,16 +568,23 @@ final class LedgerAssistant {
             put(facts, "baseline", object("start", a, "end", b, "days", ChronoUnit.DAYS.between(LocalDate.parse(a), LocalDate.parse(b)) + 1,
                     "incomeMinor", previousIncome, "expenseMinor", previousExpense, "count", prior.size(), "recordedDays", dates.size()));
         }
-        return object("query", query, "facts", facts, "entries", shown, "ranking", ranking);
+        JSONObject groupRank = null;
+        if (!dimension.isEmpty()) {
+            String groupOrder = query.optString("groupOrder");
+            addStep(token, steps, "排行 · 按" + dimension + ("amount".equals(groupOrder) ? "和金额" : "和笔数"));
+            groupRank = LedgerSkills.group(rows, dimension, groupOrder, query.optInt("groupLimit", 10));
+            put(facts, "groupRank", LedgerSkills.anonymousGroup(groupRank));
+        }
+        return object("query", query, "facts", facts, "entries", shown, "ranking", ranking, "groupRank", groupRank, "steps", steps);
     }
 
     /**
      * 应用日期、收支类型、分类与精确线索筛选。
      */
     private List<LedgerDb.Entry> scoped(String start, String end, String type, String category, Map<String, String> names,
-                                        List<String> terms, JSONArray filters) {
-        List<LedgerDb.Entry> rows = terms.isEmpty() && (filters == null || filters.length() == 0)
-                ? db.statsEntries(start, end, type) : new ArrayList<>(db.search(start, end, type, null, terms, filters));
+                                        List<String> terms, JSONArray filters, JSONArray programWords, boolean useText, boolean needsClues) {
+        List<LedgerDb.Entry> rows = needsClues && !useText && (filters == null || filters.length() == 0)
+                ? db.entries(start, end, type, null) : LedgerSkills.recall(db, start, end, type, terms, programWords, filters, useText);
         if (!category.isEmpty()) rows.removeIf(entry -> !category.equals(names.get(entry.categoryId)));
         return rows;
     }
@@ -589,7 +619,8 @@ final class LedgerAssistant {
         return object("start", facts.optString("start"), "end", facts.optString("end"), "days", facts.optLong("days"),
                 "count", facts.optLong("count"), "incomeMinor", facts.optLong("incomeMinor"), "expenseMinor", facts.optLong("expenseMinor"),
                 "largestMinor", facts.optLong("largestMinor"), "metric", facts.optString("metric"), "category", facts.optString("category"),
-                "view", facts.optString("view"), "baseline", facts.optJSONObject("baseline"), "top", facts.optJSONArray("top"));
+                "view", facts.optString("view"), "baseline", facts.optJSONObject("baseline"), "top", facts.optJSONArray("top"),
+                "groupRank", facts.optJSONObject("groupRank"));
     }
 
     /**
@@ -781,5 +812,26 @@ final class LedgerAssistant {
     synchronized void clearConfiguration() {
         cancel();
         base = model = key = "";
+    }
+
+    /**
+     * 保存本机实际执行的 Skill 步骤并更新活动进度。
+     */
+    private void addStep(int token, JSONArray steps, String detail) {
+        if (token != generation) throw new IllegalStateException("已停止处理");
+        steps.put(detail);
+        stage = detail;
+    }
+
+    /**
+     * 确保本机核算数据保留在模型整理后的答复里。
+     */
+    private void ensureBlock(JSONArray blocks, String type, boolean required) {
+        if (!required) return;
+        for (int i = 0; i < blocks.length(); i++) {
+            JSONObject block = blocks.optJSONObject(i);
+            if (block != null && type.equals(block.optString("type"))) return;
+        }
+        blocks.put(object("type", type));
     }
 }

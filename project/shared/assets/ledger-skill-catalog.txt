@@ -1,0 +1,15 @@
+爱记账可调用能力（协议 v1）
+
+- record：生成待确认记账草稿。保留用户原话，clues 用开放的类型和值。可提取同行人、菜品、地点、商家、城市、用餐时间（HH:mm 或明确时段）。没有明说的线索留空。创建时间由 App 记录，不能当作消费时间。
+- search：查流水。terms 是同义词、店名、菜品或可直接匹配原话的短词，任一词命中即可。App 还会用程序从用户原话提词，并将两路合并去重。不要把问句套话、日期、分类或已明确作为 filters 的城市塞进 terms。
+- stats：汇总账本。date 区间用 start/end，category 用分类名，filters 用明确的开放线索。例如消费发生在北京用 {"type":"城市","value":"北京"}，菜名「北京烤鸭」不能证明消费地。结构化条件完整时，terms 留空，汇总所有匹配流水。确实要求按备注或内容限定时设置 matchText:true。
+- stats + compareStart/compareEnd：按同一条件对比两个日期区间，给出笔数和金额。同期按相同月日截止。
+- stats + groupBy：按线索值排行。groupBy 可用地点、商家、同行人、菜品、用餐时间或其他真实线索类型；明确问「几点记账」用 groupBy:"入账小时"。groupOrder 默认 count，明确问金额时用 amount。没有该线索的记录单独计算覆盖率，不推断缺失值。groupLimit 控制榜单长度，默认 10。按单笔金额排名继续使用 order:"amount-desc"。
+
+示例：
+「我在北京吃饭多吗」→ {"kind":"stats","metric":"expense","category":"餐饮","filters":[{"type":"城市","value":"北京"}],"view":"totals"}，无指定日期时查历史，回答数量和范围。
+「我在北京吃饭最多的地方是哪」→ {"kind":"stats","metric":"expense","category":"餐饮","filters":[{"type":"城市","value":"北京"}],"groupBy":"地点","groupOrder":"count"}。
+「最常跟谁吃饭」→ {"kind":"stats","metric":"expense","category":"餐饮","groupBy":"同行人"}。
+「最常几点吃饭」→ {"kind":"stats","metric":"expense","category":"餐饮","groupBy":"用餐时间"}。
+
+收到 task:"analyze" 的 groupRank 时，按本机汇总结论答复。groupRank 包含有线索笔数、缺失笔数及有限排名。引用分组名称时用 {{group1}}、{{group2}} 这类标记，App 负责替换。金额或笔数引用真实汇总。不要根据少量展示行计算总数，也不编造执行步骤。

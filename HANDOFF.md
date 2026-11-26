@@ -7,9 +7,17 @@
 1. 阅读 [`AGENTS.md`](AGENTS.md) 的分支、Wiki、提交与验收约定。每次开发改动同步更新本文件、AGENTS 待办和对应需求 Wiki，并与代码一起提交推送。
 2. Web 需求阅读 `wiki/2026-09-30-init/`、`wiki/2026-09-30-1/` 与 `wiki/2026-10-09/`；Android 需求阅读 [`wiki/2026-10-10/原生Android-PRD与验收.md`](wiki/2026-10-10/原生Android-PRD与验收.md) 和 [`开发进度.md`](wiki/2026-10-10/开发进度.md)。
 3. 检查 `git status --short --branch` 并更新 `master`。Web、Android 新需求都从 `master` 按日期开需求分支；不再用平台专属主分支。
-4. 当前需求先读 [Android 与 Web 对齐](wiki/2026-11-25-2/Android与Web对齐.md)。Web 参考见 [AI 跨年排行与追问](wiki/2026-11-25-1/AI跨年排行与追问.md)、[首页流水滑动跨月](wiki/2026-11-25-1/首页流水滑动跨月.md) 和 [智能索引与分月备份](wiki/2026-11-25/智能索引与分月备份.md)。
+4. 当前需求先读 [账本 Skill 与真机排版](wiki/2026-11-26/账本Skill与真机排版.md)。Android 界面基线见 [Android 与 Web 对齐](wiki/2026-11-25-2/Android与Web对齐.md)。旧版索引与会话细节见 [智能索引与分月备份](wiki/2026-11-25/智能索引与分月备份.md) 和 [AI 跨年排行与追问](wiki/2026-11-25-1/AI跨年排行与追问.md)。
 
-## 当前交接（`2026-11-25-2`）
+## 当前交接（`2026-11-26`）
+
+- 本分支承接 `2026-11-25-2` 的原生验收版，Android 版本 0.2.4、versionCode 8。独立验收 APK 内置 15 年、10 万笔合成流水；普通 APK 继续沿用原应用 ID 和原有数据库。验收后再合入主线。
+- 账本 Agent 共用 [Skill 契约](project/shared/assets/ledger-skill-catalog.txt)。Web 的 `assistant-bridge.js` 和 Android 的 `LedgerAssistant.java` 向模型提供该契约，Web 的 `ledger-skills.js` 和原生的 `LedgerSkills.java` 在本机执行双路检索、排行等操作。`assistant.js` 和 `MainActivity.java` 展示并保存可折叠的执行步骤。Gradle 和 SDK 打包脚本包含同一份资产。
+- 现有 IndexedDB 与 SQLite 索引继续使用。程序和模型词组通过同一索引召回，按 ID 去重，结构化筛选保持生效。排行区分实际消费线索与设备入账时间，分组名称按匿名编号在本机还原。当前定位只存设备原始坐标，城市统计依赖结构化城市线索。
+- Android 首页调整流水标题间距、标题和金额字重、数字对齐及次要标签，保留系统字号缩放。待用户在截图来源设备用新版复核，重点看首页结余、流水标题与底部标签。
+- 本地验证步骤与结果见 [验收记录](wiki/2026-11-26/账本Skill与真机排版.md)。下一位开发者应先比对执行步骤、筛选和原生日志，再判断问题位于模型、索引、统计还是渲染。新 Skill 需要同步修改契约、两端实现和交接。
+
+## 上一需求交接（`2026-11-25-2`）
 
 - 从更新后的 `master` 开分支，沿用用户接受的 Web 工作版本 `2c9e7ad` 和上一轮 Android 原生界面基线。Web 与 Android 展示名统一为「爱记账」。Android 版本 0.2.3、versionCode 7、最低 Android 8.0。
 - 优先交付 [AiLedger-acceptance.apk](project/android/AiLedger-acceptance.apk)。验收包使用独立应用 ID，首次启动在后台导入 15 年、10 万笔合成流水，完成后可在「我的」看到总笔数。含预算、资产和 2,000 笔带北京四季民福烤鸭线索的流水。[SimpleLedger-debug.apk](project/android/SimpleLedger-debug.apk) 沿用原应用 ID 和原有数据库，用于同签名覆盖升级。

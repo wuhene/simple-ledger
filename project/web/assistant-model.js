@@ -1,7 +1,7 @@
 import { EXPENSE, INCOME, isValidDate, parseMoney } from "./model.js";
 import { cleanClues, cleanTerms } from "./ledger-search.js";
 
-const dataBlocks = ["totals", "categories", "entries", "comparison"];
+const dataBlocks = ["totals", "categories", "entries", "comparison", "groupRank"];
 const numerals = "一二三四五六七八九";
 const resultIdPattern = /^r[1-9]\d{0,7}$/;
 const clip = (value, length) => typeof value === "string" ? [...value].slice(0, length).join("") : undefined;
@@ -100,8 +100,8 @@ export function validateIntent(intent, today) {
   if (["search", "stats", "insight"].includes(intent?.kind)) {
     const terms = cleanTerms(intent.terms), filters = cleanClues(intent.filters);
     const limit = intent.order === "amount-desc" ? rankLimit(intent.limit) || 10 : 0;
-    const hasQuery = Boolean(terms.length || filters.length || limit);
-    if (intent.kind === "search" && !hasQuery) throw new Error("请提供想查找的店名、菜品、地点或备注关键词。");
+    const groupBy = typeof intent.groupBy === "string" ? intent.groupBy.normalize("NFKC").trim().slice(0, 24) : "";
+    const hasQuery = Boolean(terms.length || filters.length || limit || groupBy || intent.kind === "search");
     const start = intent.start ?? (hasQuery ? "1900-01-01" : undefined);
     const end = intent.end ?? (hasQuery ? today : undefined);
     const { metric, category } = intent;
@@ -116,8 +116,10 @@ export function validateIntent(intent, today) {
     return { kind: intent.kind, start, end: end > today ? today : end,
       metric: intent.kind === "insight" ? "expense" : intent.kind === "search" ? "overview" : metric,
       category, comparison, text, terms, filters, limit,
+      groupBy, groupOrder: intent.groupOrder === "amount" ? "amount" : "count", groupLimit: rankLimit(intent.groupLimit) || 10,
+      matchText: intent.matchText === true || (intent.matchText === undefined && !groupBy && terms.length > 0),
       order: limit ? "amount-desc" : intent.order === "latest" ? "latest" : "",
-      view: intent.kind === "search" || limit ? "entries" : dataBlocks.includes(view) ? view : "" };
+      view: groupBy ? "groupRank" : intent.kind === "search" || limit ? "entries" : dataBlocks.includes(view) ? view : "" };
   }
   if (intent?.kind === "clarify" && typeof intent.question === "string" && intent.question.trim() && [...intent.question].length <= 100) {
     return { kind: "clarify", question: intent.question.trim() };

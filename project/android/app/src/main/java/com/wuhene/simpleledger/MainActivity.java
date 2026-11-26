@@ -99,6 +99,9 @@ public final class MainActivity extends Activity {
     private View highlightedEntry;
     private TextView saveStatus;
     private ListView recordList;
+    private final Typeface normalFace = Typeface.create("sans-serif", Typeface.NORMAL);
+    private final Typeface strongFace = Build.VERSION.SDK_INT >= 28
+            ? Typeface.create(normalFace, 650, false) : Typeface.create(normalFace, Typeface.BOLD);
 
     private static final class Page { final String name, id; int scroll, firstRow, rowOffset; Page(String name, String id) { this.name = name; this.id = id; } }
 
@@ -149,7 +152,18 @@ public final class MainActivity extends Activity {
     private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setOrientation(0); l.setGravity(Gravity.CENTER_VERTICAL); return l; }
     private void padding(View v, int h, int vert) { v.setPadding(dp(h), dp(vert), dp(h), dp(vert)); }
     private LinearLayout.LayoutParams lp(int w, int h) { return new LinearLayout.LayoutParams(w < 0 ? w : dp(w), h < 0 ? h : dp(h)); }
-    private TextView text(String value, int sp, int color, boolean bold) { TextView t = new TextView(this); t.setText(value); t.setTextSize(sp); t.setTextColor(color); t.setGravity(Gravity.CENTER_VERTICAL); if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t; }
+    /**
+     * 使用明确的界面字重并保留系统字号设置。
+     */
+    private TextView text(String value, int sp, int color, boolean bold) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(sp);
+        view.setTextColor(color);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+        view.setTypeface(bold ? strongFace : normalFace);
+        return view;
+    }
     private void space(LinearLayout l, int h) { l.addView(new View(this), lp(1, h)); }
     /**
      * 创建采用当前主题的操作按钮。
@@ -425,7 +439,7 @@ public final class MainActivity extends Activity {
         addCard(hero, summary);
         body.addView(hero);
         LinearLayout heading = row();
-        padding(heading, 20, 8);
+        padding(heading, 20, 4);
         heading.addView(text("流水", 16, DARK, true), new LinearLayout.LayoutParams(0, -2, 1));
         if (savedEntryId != null) {
             saveStatus = text("✓ 已保存", 12, GREEN, true);
@@ -1004,7 +1018,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.3。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.4。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -2057,6 +2071,7 @@ public final class MainActivity extends Activity {
             }
             TextView sender = text("✦  爱记账助手", 13, GREEN, true);
             body.addView(sender, lp(-1, 28));
+            renderSkillTrace(body, item.optJSONArray("steps"));
             switch (item.optString("kind")) {
                 case "receipt": renderAssistantReceipt(body, item); break;
                 case "result": renderAssistantResult(body, item); break;
@@ -2072,7 +2087,9 @@ public final class MainActivity extends Activity {
         if (assistantBusy) {
             space(body, 10);
             LinearLayout progress = row();
-            progress.addView(text(assistantProgress, 14, MUTED, false), new LinearLayout.LayoutParams(0, dp(44), 1));
+            TextView label = text(assistantProgress, 13, MUTED, false);
+            progress.addView(label, new LinearLayout.LayoutParams(0, dp(44), 1));
+            label.post(() -> updateSkillProgress(label));
             progress.addView(ghost("停止", () -> stopAssistant(true)), lp(58, 44));
             body.addView(progress);
         }
@@ -2144,7 +2161,8 @@ public final class MainActivity extends Activity {
         }
         hideKeyboard();
         assistantBusy = true;
-        assistantProgress = "正在处理…";
+        assistantProgress = "正在理解你的问题";
+        assistant.stage = assistantProgress;
         int request = ++assistantRequest;
         int token = assistant.begin(message);
         assistantFollowBottom = true;
@@ -2309,6 +2327,8 @@ public final class MainActivity extends Activity {
     private void renderAssistantData(LinearLayout body, JSONObject snapshot, String type, String title) {
         JSONObject facts = snapshot.optJSONObject("facts");
         if (facts == null) return;
+        JSONObject group = snapshot.optJSONObject("groupRank");
+        if ("groupRank".equals(type) && group == null) return;
         LinearLayout result = card();
         result.setBackground(outline(0xfffafafb, 16, LINE));
         String category = facts.optString("category");
@@ -2316,7 +2336,8 @@ public final class MainActivity extends Activity {
             switch (type) {
                 case "entries": title = (category.isEmpty() ? "流水" : category) + "明细"; break;
                 case "categories": title = "分类排行"; break;
-                case "comparison": title = "支出对比"; break;
+                case "comparison": title = "账期对比"; break;
+                case "groupRank": title = group.optString("dimension") + "排行"; break;
                 case "totals": title = category.isEmpty() ? "收支统计" : category + "汇总"; break;
                 default: return;
             }
@@ -2328,6 +2349,9 @@ public final class MainActivity extends Activity {
         }
         space(result, 8);
         switch (type) {
+            case "groupRank":
+                renderGroupRank(result, group);
+                break;
             case "entries": renderAssistantEntries(result, snapshot, facts); break;
             case "categories":
                 JSONArray ranking = snapshot.optJSONArray("ranking");
@@ -2340,11 +2364,15 @@ public final class MainActivity extends Activity {
                 break;
             case "comparison":
                 JSONObject baseline = facts.optJSONObject("baseline");
-                chatValue(result, "本期支出", money(facts.optLong("expenseMinor")));
+                chatValue(result, "本期笔数", facts.optInt("count") + " 笔");
                 if (baseline != null) {
-                    chatValue(result, baseline.optString("start") + " 至 " + baseline.optString("end"), money(baseline.optLong("expenseMinor")));
-                    if (!hidden && baseline.optLong("expenseMinor") > 0) chatValue(result, "与对比期相比",
-                            String.format(Locale.CHINA, "%+.1f%%", 100d * (facts.optLong("expenseMinor") - baseline.optLong("expenseMinor")) / baseline.optLong("expenseMinor")));
+                    chatValue(result, "对比期 " + baseline.optString("start") + " 至 " + baseline.optString("end"), baseline.optInt("count") + " 笔");
+                    if (!"expense".equals(facts.optString("metric"))) {
+                        renderComparedAmount(result, "收入", facts.optLong("incomeMinor"), baseline.optLong("incomeMinor"));
+                    }
+                    if (!"income".equals(facts.optString("metric"))) {
+                        renderComparedAmount(result, "支出", facts.optLong("expenseMinor"), baseline.optLong("expenseMinor"));
+                    }
                 }
                 break;
             default:
@@ -2767,9 +2795,13 @@ public final class MainActivity extends Activity {
     private String assistantPlaceholders(String message, JSONObject snapshot) {
         if (snapshot == null) return message;
         JSONArray ranks = snapshot.optJSONArray("ranking");
+        JSONObject group = snapshot.optJSONObject("groupRank");
+        JSONArray groups = group == null ? null : group.optJSONArray("groups");
         for (int i = 1; i <= 5; i++) {
             JSONObject rank = ranks == null ? null : ranks.optJSONObject(i - 1);
             message = message.replace("{{category" + i + "}}", rank == null ? "该分类" : rank.optString("name"));
+            JSONObject groupRow = groups == null ? null : groups.optJSONObject(i - 1);
+            message = message.replace("{{group" + i + "}}", groupRow == null ? "该组" : groupRow.optString("name"));
         }
         return message;
     }
@@ -3318,12 +3350,18 @@ public final class MainActivity extends Activity {
                 line.addView(new FrameLayout(MainActivity.this), lp(32, 32));
                 LinearLayout labels = column();
                 labels.setPadding(dp(10), 0, dp(8), 0);
-                labels.addView(text("", 15, DARK, true));
+                TextView primary = text("", 15, DARK, true);
+                primary.setIncludeFontPadding(false);
+                labels.addView(primary);
                 TextView sublabel = text("", 12, MUTED, false);
+                sublabel.setIncludeFontPadding(false);
                 sublabel.setPadding(0, dp(3), 0, 0);
                 labels.addView(sublabel);
                 line.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
-                line.addView(text("", 15, DARK, true));
+                TextView amount = text("", 15, DARK, true);
+                amount.setFontFeatureSettings("'tnum'");
+                amount.setIncludeFontPadding(false);
+                line.addView(amount);
                 container.addView(line);
                 rule(container, 0xfff7f8fa);
             }
@@ -3354,6 +3392,59 @@ public final class MainActivity extends Activity {
             amount.setText((income ? "+" : "−") + (hidden ? "••••" : LedgerMath.money(entry.amountMinor)));
             amount.setTextColor(income ? GREEN : DARK);
             return container;
+        }
+    }
+
+    /**
+     * 默认收起并可展开实际执行的 Skill 步骤。
+     */
+    private void renderSkillTrace(LinearLayout body, JSONArray steps) {
+        if (steps == null || steps.length() == 0) return;
+        LinearLayout details = column();
+        details.setVisibility(View.GONE);
+        TextView toggle = text("已执行 " + steps.length() + " 个账本步骤 ▸", 12, MUTED, false);
+        toggle.setMinHeight(dp(32));
+        toggle.setOnClickListener(view -> {
+            boolean show = details.getVisibility() != View.VISIBLE;
+            details.setVisibility(show ? View.VISIBLE : View.GONE);
+            toggle.setText("已执行 " + steps.length() + " 个账本步骤 " + (show ? "▾" : "▸"));
+        });
+        body.addView(toggle);
+        for (int i = 0; i < steps.length(); i++) details.addView(text((i + 1) + ". " + steps.optString(i), 12, MUTED, false));
+        body.addView(details);
+    }
+
+    /**
+     * 更新进行中的账本步骤而不重画聊天记录。
+     */
+    private void updateSkillProgress(TextView label) {
+        if (!assistantBusy || !label.isAttachedToWindow()) return;
+        String stage = assistant.stage;
+        if (!stage.isEmpty() && !stage.contentEquals(label.getText())) label.setText(stage);
+        label.postDelayed(() -> updateSkillProgress(label), 160);
+    }
+
+    /**
+     * 显示开放线索排行及有值和缺失笔数。
+     */
+    private void renderGroupRank(LinearLayout card, JSONObject rank) {
+        card.addView(text("有线索 " + rank.optInt("covered") + " 笔 · 缺失 " + rank.optInt("missing") + " 笔", 13, MUTED, false));
+        JSONArray groups = rank.optJSONArray("groups");
+        if (groups == null) return;
+        for (int i = 0; i < groups.length(); i++) {
+            JSONObject group = groups.optJSONObject(i);
+            if (group == null) continue;
+            chatValue(card, (i + 1) + ". " + group.optString("name"), group.optInt("count") + " 笔 · " + money(group.optLong("amountMinor")));
+        }
+    }
+
+    /**
+     * 显示两个账期的金额与可计算的变化幅度。
+     */
+    private void renderComparedAmount(LinearLayout card, String label, long current, long baseline) {
+        chatValue(card, label, money(current) + " / " + money(baseline));
+        if (!hidden && baseline > 0) {
+            chatValue(card, label + "变化", String.format(Locale.CHINA, "%+.1f%%", 100d * (current - baseline) / baseline));
         }
     }
 }

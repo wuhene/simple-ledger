@@ -15,11 +15,15 @@ const assets = {
   "/assistant-model.js": ["assistant-model.js", "text/javascript"],
   "/category-icons.js": ["category-icons.js", "text/javascript"],
   "/ledger-search.js": ["ledger-search.js", "text/javascript"],
+  "/ledger-skills.js": ["ledger-skills.js", "text/javascript"],
   "/ledger-rollups.js": ["ledger-rollups.js", "text/javascript"],
   "/ledger-backup.js": ["ledger-backup.js", "text/javascript"],
   "/vendor/fflate.js": ["vendor/fflate.js", "text/javascript"],
 };
-const systemPrompt = (await readFile(new URL("./assistant-prompt.txt", import.meta.url), "utf8")).trim();
+const systemPrompt = (await Promise.all([
+  readFile(new URL("./assistant-prompt.txt", import.meta.url), "utf8"),
+  readFile(new URL("../shared/assets/ledger-skill-catalog.txt", import.meta.url), "utf8"),
+])).map(part => part.trim()).join("\n\n");
 
 function reply(res, status, body, type = "application/json") {
   res.writeHead(status, { "Content-Type": type + "; charset=utf-8", "Cache-Control": "no-store",
@@ -103,6 +107,9 @@ async function proxy(req, res) {
     } : undefined,
     lastQuery: previous && { start: date(previous.start), end: date(previous.end),
       metric: shortText(previous.metric, 8), category: shortText(previous.category, 24), view: shortText(previous.view, 12) || undefined,
+      groupBy: shortText(previous.groupBy, 24) || undefined,
+      groupOrder: ["count", "amount"].includes(previous.groupOrder) ? previous.groupOrder : undefined,
+      matchText: previous.matchText === true,
       ...(previous.order === "amount-desc" ? { order: previous.order, limit: rankLimit(previous.limit) || 10 } : {}),
       ...(previous.terms?.length ? { terms: cleanTerms(previous.terms) } : {}),
       ...(previous.filters?.length ? { filters: cleanClues(previous.filters) } : {}) },
@@ -122,10 +129,19 @@ async function proxy(req, res) {
     const comparison = baseline && date(baseline.start) && date(baseline.end) &&
       baselineKeys.every(key => Number.isSafeInteger(baseline[key]) && baseline[key] >= 0) && baseline.days > 0
       ? Object.fromEntries(["start", "end", ...baselineKeys].map(key => [key, baseline[key]])) : undefined;
+    const group = facts.groupRank;
+    const groupRank = group && typeof group.dimension === "string" && ["covered", "missing"].every(key =>
+      Number.isSafeInteger(group[key]) && group[key] >= 0) ? {
+        dimension: shortText(group.dimension, 24), covered: group.covered, missing: group.missing,
+        groups: Array.isArray(group.groups) ? group.groups.slice(0, 5).filter(item =>
+          ["count", "amountMinor"].every(key => Number.isSafeInteger(item?.[key]) && item[key] >= 0))
+          .map(({ count, amountMinor }) => ({ count, amountMinor })) : [],
+      } : undefined;
     task = { task: "analyze", text: input.text, recentTurns: turns.length ? turns : undefined,
       resultRefs: refs.length ? refs : undefined, facts: {
       ...Object.fromEntries([...dateKeys, ...numberKeys].map(key => [key, facts[key]])),
       metric: facts.metric, category: shortText(facts.category, 24), view: shortText(facts.view, 12), baseline: comparison,
+      groupRank,
       top: Array.isArray(facts.top) ? facts.top.slice(0, 5).filter(item =>
         Number.isSafeInteger(item?.amountMinor) && item.amountMinor >= 0 &&
         Number.isFinite(item.percent) && item.percent >= 0 && item.percent <= 100)
