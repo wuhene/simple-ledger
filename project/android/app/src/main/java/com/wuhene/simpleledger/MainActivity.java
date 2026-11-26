@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
     private String detailStart, detailEnd;
     private boolean hidden, entryClosing, saving, showAllMonths;
     private LedgerDb.Entry draft;
-    private String expression = "", initialDraft = "";
+    private String expression = "";
     private int themeId, GREEN, SOFT, ACTION, ACTION_TEXT, TOP, TOP_TEXT;
     private LedgerAssistant assistant;
     private ScrollView pageScroll, entryCategoryScroll;
@@ -109,6 +109,7 @@ public final class MainActivity extends Activity {
     private int pageStatusBarColor = BG;
     private final Typeface mediumFace = Build.VERSION.SDK_INT >= 28
             ? Typeface.create(normalFace, 500, false) : Typeface.create("sans-serif-medium", Typeface.NORMAL);
+    private boolean entryDockVisible;
 
     private static final class Page { final String name, id; int scroll, firstRow, rowOffset; Page(String name, String id) { this.name = name; this.id = id; } }
 
@@ -1038,7 +1039,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n从明细或统计右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.12。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.13。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -1371,6 +1372,7 @@ public final class MainActivity extends Activity {
         draft.businessDate = source == null ? LedgerMath.today() : source.businessDate;
         draft.note = source == null ? "" : source.note;
         expression = source == null ? "" : LedgerMath.money(source.amountMinor).replace(",", "");
+        entryDockVisible = source != null;
         if (source != null) {
             draft.id = source.id;
             draft.categoryId = source.categoryId;
@@ -1379,7 +1381,6 @@ public final class MainActivity extends Activity {
             draft.clues = source.clues;
             draft.location = source.location;
         }
-        initialDraft = snapshot();
         entryClosing = false;
         entryCard = new FrameLayout(this);
         entryCard.setBackground(shape(BG, 15));
@@ -1394,10 +1395,6 @@ public final class MainActivity extends Activity {
             entryCard.animate().translationY(0).setDuration(260).setInterpolator(new PathInterpolator(.22f, 1f, .36f, 1f)).start();
         }
     }
-    /**
-     * 记录用于判断是否有未保存改动的草稿状态。
-     */
-    private String snapshot() { return draft.type + "|" + draft.categoryId + "|" + draft.businessDate + "|" + draft.note + "|" + expression + "|" + draft.location; }
     /**
      * 绘制分类优先的原生记账页面。
      */
@@ -1418,6 +1415,7 @@ public final class MainActivity extends Activity {
                 if (type.equals(draft.type)) return;
                 preserveNote();
                 draft.type = type; draft.categoryId = null;
+                entryDockVisible = false;
                 buildEntry();
             });
             typeSwitch.addView(option, new LinearLayout.LayoutParams(0, dp(44), 1));
@@ -1434,8 +1432,9 @@ public final class MainActivity extends Activity {
         grid.setColumnCount(4);
         scroll.addView(grid);
         for (LedgerDb.Category category : db.categories(draft.type, true)) {
-            boolean selected = category.id.equals(draft.categoryId);
-            if (category.hidden && !selected) continue;
+            boolean current = category.id.equals(draft.categoryId);
+            if (category.hidden && !current) continue;
+            boolean selected = entryDockVisible && current;
             LinearLayout item = column();
             item.setGravity(Gravity.CENTER);
             item.setSelected(selected);
@@ -1453,9 +1452,10 @@ public final class MainActivity extends Activity {
             grid.addView(item, params);
             item.setOnClickListener(view -> {
                 preserveNote();
-                boolean reveal = draft.categoryId == null;
+                boolean reveal = !entryDockVisible;
                 int position = scroll.getScrollY();
                 draft.categoryId = category.id;
+                entryDockVisible = true;
                 buildEntry();
                 if (entryCategoryScroll != null) entryCategoryScroll.post(() -> entryCategoryScroll.scrollTo(0, position));
                 if (ValueAnimator.areAnimatorsEnabled()) {
@@ -1471,7 +1471,7 @@ public final class MainActivity extends Activity {
         }
         entryCategoryScroll = scroll;
         entryDock = null;
-        if (draft.categoryId != null) renderEntryDock(shell);
+        if (entryDockVisible) renderEntryDock(shell);
         shell.setFocusableInTouchMode(true);
         shell.requestFocus();
         root.requestApplyInsets();
@@ -1568,9 +1568,17 @@ public final class MainActivity extends Activity {
         }
         if (entryCard != null) {
             if (entryClosing) return;
-            preserveNote();
-            if (!snapshot().equals(initialDraft)) confirmSheet("放弃这笔记录？", "尚未保存的输入将丢失。", "继续填写", "放弃", () -> closeEntry(false));
-            else closeEntry(false);
+            if (entryDockVisible) {
+                preserveNote();
+                hideKeyboard();
+                int position = entryCategoryScroll.getScrollY();
+                entryDockVisible = false;
+                buildEntry();
+                ScrollView categories = entryCategoryScroll;
+                categories.post(() -> categories.scrollTo(0, position));
+            } else {
+                closeEntry(false);
+            }
             return;
         }
         if (!history.isEmpty()) { backPage(); return; } if (!page.name.equals("home")) { tab("home"); return; } finish();
