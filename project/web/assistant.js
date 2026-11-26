@@ -1,19 +1,22 @@
 import { EXPENSE, INCOME, categoryTotals, dayCount, localToday, money, shiftDate, sortEntries, totals } from "./model.js";
-import { clearLedger, loadAssistantHistory, putEntry, putMeta, queryEntries, removeEntry, saveAssistantSession } from "./storage.js";
+import { clearLedger, loadAssistantHistory, putEntry, putMeta, queryEntries, readEntry, removeEntry, saveAssistantSession } from "./storage.js";
 import { cleanConversationTurns, cleanResultReferences, isResultDateFollowUp, requestedRank, validateIntent } from "./assistant-model.js";
-import { cleanClues } from "./ledger-search.js";
+import { cleanClues, currentLedgerLocation, noteWithPlace } from "./ledger-search.js";
 import { groupLedger, programTerms, recallLedger } from "./ledger-skills.js";
 
 const paragraph = (escape, value) => '<p class="micro">' + escape(value) + '</p>';
 const typeName = type => type === INCOME ? "收入" : "支出";
 
-export function createAssistant({ getData, escape: E, render, reload, isOpen, openChat }) {
+export function createAssistant({ getData, escape: E, render, reload, isOpen, openChat, openPlacePicker }) {
   let config = { base: "", model: "", key: "" };
   const bookingModeKey = "ai-ledger-booking-mode";
+  const autoLocationKey = "ai-ledger-auto-location";
   let bookingMode = localStorage.getItem(bookingModeKey) === "auto" ? "auto" : "confirm";
+  let autoLocation = localStorage.getItem(autoLocationKey) === "on";
   let status = "", input = "", busy = false, testing = false, context = null, draft = null, request = null;
   let progress = "", requestText = "";
   let chat = [], previousInput = "";
+  let pickedPlace = null;
   let activeId = "", historyError = "";
   const sessions = new Map();
   const say = (text, user = false) => {
@@ -32,6 +35,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     context = session?.context || null;
     previousInput = session?.previousInput || "";
     draft = session?.draft || null;
+    pickedPlace = null;
     input = session?.input || "";
   }
 
@@ -118,6 +122,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       (bookingMode === "confirm" ? " selected" : "") + '>需确认</option><option value="auto"' +
       (bookingMode === "auto" ? " selected" : "") + '>自动记账</option></select></label>' +
       paragraph(E, "自动记账会直接保存信息完整的流水，保存后可在聊天中撤销。") +
+      '<label><input type="checkbox" name="autoLocation"' + (autoLocation ? " checked" : "") + '> AI 入账时附上当前位置</label>' +
+      paragraph(E, "保存手机或浏览器当时的位置，和你说的消费地点分别记录。定位不可用时仍可入账。") +
       paragraph(E, "聊天会向模型发送输入和必要上下文。分析账本时会用到相关汇总，原始流水和备注由本机展示。配置在刷新前有效。") +
       '<div class="ai-actions"><button class="primary" name="action" value="save"' + (testing ? " disabled" : "") + '>保存设置</button>' +
       '<button class="outline" name="action" value="test"' + (testing ? " disabled" : "") + '>' + (testing ? "测试中…" : "测试连接") + '</button>' +
@@ -145,8 +151,16 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     const type = query.metric === "income" ? INCOME : EXPENSE;
     const categoryIds = new Set(categories.filter(item => item.name === query.category &&
       (query.metric === "overview" || item.type === type)).map(item => item.id));
-    const useText = query.kind === "search" || query.matchText || (!query.groupBy && !query.category && !query.filters?.length && query.terms?.length);
-    const scopedRows = async bounds => (await recallLedger(queryEntries, { ...bounds, filters: query.filters }, query.terms, query.programTerms, useText)).filter(item =>
+    let nearby;
+    if (query.nearbyKm) {
+      step("定位当前位置");
+      const origin = await currentLedgerLocation();
+      if (!origin) throw new Error("无法获取当前位置，请允许定位后重试。");
+      nearby = { km: query.nearbyKm, origin };
+      step("按入账坐标筛选 · " + nearby.km + " 公里内");
+    }
+    const useText = (query.kind === "search" && !nearby) || query.matchText || (!query.groupBy && !query.category && !query.filters?.length && query.terms?.length);
+    const scopedRows = async bounds => (await recallLedger(queryEntries, { ...bounds, filters: query.filters, nearby }, query.terms, query.programTerms, useText)).filter(item =>
       (query.metric === "overview" || item.type === type) &&
       (!query.category || categoryIds.has(item.categoryId)));
     const days = dayCount(query);
@@ -170,7 +184,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     const ordered = query.order === "amount-desc"
       ? rows.sort((a, b) => b.amountMinor - a.amountMinor || b.businessDate.localeCompare(a.businessDate) ||
         b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
-      : query.kind === "search" && query.order !== "latest" ? rows : sortEntries(rows);
+      : query.kind === "search" && query.order !== "latest" && !nearby ? rows : sortEntries(rows);
     const facts = { start: query.start, end: query.end, days, count: rows.length, category: query.category,
       metric: query.metric, view: query.view, incomeMinor: income, expenseMinor: expense,
       ...(query.order === "amount-desc" ? { order: query.order, limit: query.limit } : {}),
@@ -194,7 +208,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     if (hidden) text = "账本金额已隐藏，可以查看这次查询的日期和记录。";
     else if (!facts.count) text = "这段时间没有找到" + (facts.category ? "「" + facts.category + "」的" : "符合条件的") + "记录。";
     else if (facts.order === "amount-desc") text = "按金额从高到低列出" + (facts.category || "相关") + "流水前 " + snapshot.entries.length + " 笔。";
-    else if (query.kind === "search") text = "找到 " + facts.count + " 笔相关流水，点击记录可查看详情。";
+    else if (query.kind === "search") text = "找到 " + facts.count + (query.nearbyKm ? " 笔在当前位置 " + query.nearbyKm + " 公里内入账的流水。" : " 笔相关流水，点击记录可查看详情。");
     else if (facts.metric === "overview" && !facts.category) {
       text = "这段时间记了 " + displayMoney(facts.incomeMinor) + " 收入、" + displayMoney(facts.expenseMinor) + " 支出。";
     } else {
@@ -328,7 +342,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     if (item.kind === "receipt") {
       return '<section class="card ai-receipt"><div class="ai-receipt-main"><span class="ai-receipt-icon" aria-hidden="true">' +
         (item.undone ? "↶" : "✓") + '</span><div><strong>' + (item.undone ? "已撤销" : "已入账") +
-        '</strong>' + (item.entry.note ? paragraph(E, item.entry.note) : "") + '</div><strong class="ai-receipt-value">' +
+        '</strong>' + (item.entry.note ? paragraph(E, item.entry.note) : "") +
+        (item.entry.location ? paragraph(E, "已附入账定位") : "") + '</div><strong class="ai-receipt-value">' +
         E(displayMoney(item.entry.amountMinor)) + '</strong></div>' +
         (item.undone ? "" : '<button type="button" class="outline" data-assistant="undo" data-id="' +
           E(item.entry.id) + '"' + (busy ? " disabled" : "") + '>撤销入账</button>') + '</section>';
@@ -384,10 +399,12 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       (historyError ? '<p role="status" class="error">' + E(historyError) + '</p>' : "") +
       transcript() + '</div></div>' +
       '<div class="assistant-dock"><button type="button" class="chat-latest" data-action="assistant-latest" hidden>回到最新 ↓</button>' +
-      '<form id="assistant-chat" class="ai-composer"><textarea aria-label="聊天消息" name="message" class="field" rows="1" maxlength="600" ' +
+      '<form id="assistant-chat" class="ai-composer"><button type="button" aria-label="选择地点" class="plain place-picker-icon" data-assistant="pick-place"' +
+      (busy ? " disabled" : "") + ' aria-pressed="' + Boolean(pickedPlace?.name || pickedPlace?.location || draft?.location) + '">⌖</button><textarea aria-label="聊天消息" name="message" class="field" rows="1" maxlength="600" ' +
       'placeholder="输入一笔账，或聊聊花销"' + (!configured() ? " disabled" : "") + '>' + E(input) + '</textarea>' +
       (request ? button("stop", "停止", "ai-stop") : '<button type="submit" class="primary"' +
-        (busy || !configured() ? " disabled" : "") + '>发送</button>') + '</form></div>';
+        (busy || !configured() ? " disabled" : "") + '>发送</button>') + '</form>' +
+      (pickedPlace?.name ? paragraph(E, "地点 · " + pickedPlace.name) : "") + '</div>';
   }
 
   function previousEntryResult() {
@@ -429,7 +446,7 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
           turn = { role: "assistant", resultId: id };
         }
       } else if (item.kind === "text") {
-        turn = { role: item.user ? "user" : "assistant", text: item.text };
+        turn = { role: item.user ? "user" : "assistant", text: item.localOnly ? "已在本机核对入账定位。" : item.text };
       } else if (item.kind === "answer") {
         const text = item.blocks.flatMap(block => block.type === "bullets" ? block.items : block.text || []).join("\n");
         turn = { role: "assistant", text };
@@ -491,6 +508,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       const nextMode = fields.get("bookingMode") === "auto" ? "auto" : "confirm";
       localStorage.setItem(bookingModeKey, nextMode);
       bookingMode = nextMode;
+      autoLocation = fields.has("autoLocation");
+      localStorage.setItem(autoLocationKey, autoLocation ? "on" : "off");
     }
     const base = fields.get("base").trim(), key = fields.get("key").trim();
     const next = { base, model: fields.get("model").trim(),
@@ -551,6 +570,16 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     persistSession();
     refresh();
     try {
+      if (/^(?:你)?(?:没(?:有)?|有)?记录坐标[吗么？?。]*$|(?:刚才|刚刚|上笔|上一笔|这笔).*(?:位置|地点|在哪|定位|坐标)/.test(text)) {
+        const receipt = chat.findLast(item => item.kind === "receipt" && !item.undone);
+        if (receipt) {
+          const entry = await readEntry(receipt.entry.id);
+          if (request !== currentRequest) return;
+          say(entry ? bookingLocationReply(entry) : "这笔流水已经不存在。");
+          chat[chat.length - 1].localOnly = true;
+          return;
+        }
+      }
       const conversation = conversationContext();
       const previousResult = previousEntryResult();
       const anotherCategory = previousResult?.snapshot.facts.category &&
@@ -589,6 +618,10 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
           date: intent.date, categoryId: category?.id || "", note: intent.note,
           sourceText: previous && followsUp ? (previous + "\n" + text).slice(0, 1200) : text,
           clueText: intent.clues.map(clue => clue.type + "：" + clue.value).join("\n") };
+        if (pickedPlace) {
+          setDraftPlace(pickedPlace);
+          pickedPlace = null;
+        }
         context = { lastQuery: context?.lastQuery };
         if (automatic && category) {
           // A write in progress cannot be interrupted or moved to another session.
@@ -609,8 +642,8 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
         say(intent.text || (category ? "识别到一笔记录，请核对后入账。" : "识别到一笔记录，请先选分类。"));
         chat[chat.length - 1].steps = ["生成记账草稿 · 等待确认"];
       } else if (["search", "stats", "insight"].includes(intent.kind)) {
-        intent.programTerms = programTerms(text);
-        if (intent.kind === "search" && !intent.terms.length && !intent.programTerms.length && !intent.filters.length) throw new Error("请提供想查找的关键词。");
+        intent.programTerms = intent.nearbyKm ? [] : programTerms(text);
+        if (intent.kind === "search" && !intent.nearbyKm && !intent.terms.length && !intent.programTerms.length && !intent.filters.length) throw new Error("请提供想查找的关键词。");
         const limit = intent.groupBy ? 0 : requestedRank(text) || intent.limit;
         if (limit) Object.assign(intent, { order: "amount-desc", limit, view: "entries" });
         const snapshot = await analysisSnapshot(intent, step);
@@ -685,13 +718,14 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
       throw new Error("请选择当前收支类型下的有效分类。");
     }
     const now = new Date().toISOString();
+    const location = draft.location || (autoLocation && !draft.locationOmitted ? await currentLedgerLocation() : null);
     const clues = cleanClues(String(draft.clueText || "").split("\n").flatMap(line => {
       const divider = line.search(/[:：]/);
       return divider > 0 ? [{ type: line.slice(0, divider), value: line.slice(divider + 1) }] : [];
     }));
     const entry = { id: draft.id, type: record.type, amountMinor: record.amountMinor,
       businessDate: record.date, categoryId: draft.categoryId, note: record.note, createdAt: now, updatedAt: now,
-      ...(draft.sourceText ? { sourceText: draft.sourceText } : {}), ...(clues.length ? { clues } : {}) };
+      ...(draft.sourceText ? { sourceText: draft.sourceText } : {}), ...(clues.length ? { clues } : {}), ...(location ? { location } : {}) };
     const receipt = { kind: "receipt", entry, undone: false, steps };
     const session = sessionSnapshot([...chat, receipt], null);
     await putEntry(entry, session);
@@ -701,9 +735,35 @@ export function createAssistant({ getData, escape: E, render, reload, isOpen, op
     await reload();
   }
 
+  function bookingLocationReply(entry) {
+    const named = entry.clues?.filter(clue => ["城市", "地点", "区县", "商家"].includes(clue.type)).map(clue => clue.value).join(" · ");
+    const location = entry.location;
+    const label = location && [location.city, location.district].filter(Boolean).join(" · ");
+    return (named ? "你提到的消费地点线索是 " + named + "。" : "这笔账没有明确的消费地点线索。") +
+      (location ? "入账时保存了手机定位" + (label ? "（" + label + "）" : "") + "，坐标为 " +
+        location.latitude.toFixed(5) + ", " + location.longitude.toFixed(5) + "，精度约 " + Math.round(location.accuracy) + " 米。"
+        : "这笔未保存入账定位。");
+  }
+
+  function setDraftPlace({ name, location }) {
+    if (name && !/^(城市|区县|地点)[:：]/m.test(draft.clueText)) {
+      draft.clueText = "地点：" + name + (draft.clueText ? "\n" + draft.clueText : "");
+    }
+    draft.note = noteWithPlace(draft.note, name);
+    draft.location = location;
+    draft.locationOmitted = !location && !name;
+  }
+
   async function act(control) {
     const action = control.dataset.assistant;
-    if (action === "new-session" && (!busy || request)) {
+    if (action === "pick-place" && !busy) {
+      openPlacePicker({ selected: Boolean(pickedPlace?.name || pickedPlace?.location || draft?.location), apply: selected => {
+        if (draft) {
+          setDraftPlace(selected || { name: "", location: null });
+          persistSession();
+        } else pickedPlace = selected || { name: "", location: null };
+      } });
+    } else if (action === "new-session" && (!busy || request)) {
       await switchSession(crypto.randomUUID());
       refresh();
     } else if (action === "stop" && request) {

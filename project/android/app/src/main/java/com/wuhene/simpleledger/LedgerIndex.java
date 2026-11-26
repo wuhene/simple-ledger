@@ -37,13 +37,12 @@ final class LedgerIndex {
         List<String> values = new ArrayList<>();
         values.add(fold(entry.note));
         values.add(fold(entry.sourceText));
-        if (entry.clues != null) {
-            for (int i = 0; i < entry.clues.length(); i++) {
-                JSONObject clue = entry.clues.optJSONObject(i);
+        JSONArray clues = searchableClues(entry);
+        for (int i = 0; i < clues.length(); i++) {
+                JSONObject clue = clues.optJSONObject(i);
                 if (clue == null) continue;
                 values.add(fold(clue.optString("type")));
                 values.add(fold(clue.optString("value")));
-            }
         }
         return values;
     }
@@ -62,6 +61,9 @@ final class LedgerIndex {
                     if (i + 1 < points.length) result.add(new String(points, i, 2));
                 }
             }
+        }
+        if (entry.location != null && Double.isFinite(entry.location.optDouble("latitude"))) {
+            result.add(LedgerLocation.latitudeKey(entry.location.optDouble("latitude")));
         }
         return result;
     }
@@ -98,7 +100,7 @@ final class LedgerIndex {
         if (filters != null) {
             for (int i = 0; i < filters.length(); i++) {
                 JSONObject filter = filters.optJSONObject(i);
-                if (filter == null || !hasClue(entry.clues, filter)) return -1;
+                if (filter == null || !hasClue(searchableClues(entry), filter)) return -1;
                 score += 3;
             }
         }
@@ -132,9 +134,28 @@ final class LedgerIndex {
      */
     private static String clueValue(JSONObject clue) {
         String value = fold(clue.optString("value"));
-        if ("城市".equals(fold(clue.optString("type"))) && value.length() > 2 && value.endsWith("市")) {
+        String type = fold(clue.optString("type"));
+        if (("城市".equals(type) || "入账城市".equals(type)) && value.length() > 2 && value.endsWith("市")) {
             return value.substring(0, value.length() - 1);
         }
         return value;
+    }
+
+    /**
+     * 合并消费线索和带独立来源的入账地点。
+     */
+    static JSONArray searchableClues(LedgerDb.Entry entry) {
+        JSONArray clues = new JSONArray();
+        for (int i = 0; entry.clues != null && i < entry.clues.length(); i++) {
+            JSONObject clue = entry.clues.optJSONObject(i);
+            if (clue == null || fold(clue.optString("type")).matches("入账城市|入账区县")) continue;
+            clues.put(clue);
+        }
+        if (entry.location != null) {
+            String city = entry.location.optString("city"), district = entry.location.optString("district");
+            if (!city.isEmpty() && city.length() <= 120) clues.put(LedgerAssistant.object("type", "入账城市", "value", city));
+            if (!district.isEmpty() && district.length() <= 120) clues.put(LedgerAssistant.object("type", "入账区县", "value", district));
+        }
+        return clues;
     }
 }

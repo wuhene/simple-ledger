@@ -69,9 +69,10 @@ final class LedgerSkills {
                     int hour = Instant.parse(entry.createdAt).atZone(ZoneId.systemDefault()).getHour();
                     labels.put(String.valueOf(hour), String.format(Locale.ROOT, "%02d:00", hour));
                 } catch (java.time.DateTimeException ignored) {}
-            } else if (entry.clues != null) {
-                for (int i = 0; i < entry.clues.length(); i++) {
-                    JSONObject clue = entry.clues.optJSONObject(i);
+            } else {
+                JSONArray clues = LedgerIndex.searchableClues(entry);
+                for (int i = 0; i < clues.length(); i++) {
+                    JSONObject clue = clues.optJSONObject(i);
                     if (clue == null || !LedgerIndex.fold(clue.optString("type")).equals(LedgerIndex.fold(dimension))) continue;
                     String label = java.text.Normalizer.normalize(clue.optString("value"), java.text.Normalizer.Form.NFKC).trim().replaceAll("\\s+", " ");
                     if ("用餐时间".equals(dimension) && label.matches("(?:[01]?\\d|2[0-3]):[0-5]\\d")) {

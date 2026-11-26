@@ -39,7 +39,7 @@ import {
 } from "./storage.js";
 import { createAssistant } from "./assistant.js";
 import { categoryIconFills, categoryIconPaths } from "./category-icons.js";
-import { cleanTerms } from "./ledger-search.js";
+import { cleanTerms, cluesWithPlace, currentLedgerLocation, noteWithPlace } from "./ledger-search.js";
 import { rollupAchievements, summarizeRollups } from "./ledger-rollups.js";
 
 const $ = (s) => document.querySelector(s),
@@ -139,6 +139,7 @@ const assistant = createAssistant({
   render,
   reload,
   isOpen: () => ["assistant", "assistantSettings", "assistantHistory"].includes(state.page),
+  openPlacePicker,
   openChat: () => {
     navigate("assistant");
   },
@@ -256,7 +257,8 @@ function detail() {
   const e = state.detailEntry;
   if (!e)
     return empty("记录已不存在", "返回明细重新查看。", "go-home", "返回明细");
-  const location = e.location ? metricText("定位", `${e.location.latitude.toFixed(5)}, ${e.location.longitude.toFixed(5)} · 约 ${Math.round(e.location.accuracy)} 米`) : "";
+  const place = e.location && [e.location.city, e.location.district].filter(Boolean).join(" · ");
+  const location = e.location ? metricText("入账定位", `${place ? place + "\n" : ""}${e.location.latitude.toFixed(5)}, ${e.location.longitude.toFixed(5)} · 约 ${Math.round(e.location.accuracy)} 米`) : "";
   const source = e.sourceText ? metricText("记账原话", e.sourceText) : "";
   const clues = e.clues?.length ? metricText("检索线索", e.clues.map(clue => `${clue.type}：${clue.value}`).join("\n")) : "";
   return `<div class="card" style="text-align:center"><div class="eyebrow">${typeName(e.type)}</div><div class="hero-value ${e.type === INCOME ? "income" : ""}">${e.type === INCOME ? "+" : "−"}${formatYen(e.amountMinor)}</div><span class="chip">${E(cName(e.categoryId))}</span></div><div class="card"><div class="metric"><span>分类</span><strong>${E(cName(e.categoryId))}</strong></div><div class="metric"><span>日期</span><strong>${E(e.businessDate)}</strong></div>${metricText("备注", e.note || "无")}${location}${source}${clues}<div class="metric"><span>创建</span><strong>${E(new Date(e.createdAt).toLocaleString("zh-CN"))}</strong></div></div><button class="primary" data-action="edit-entry">编辑记录</button><button class="outline danger" data-action="ask-delete-entry">删除记录</button>`;
@@ -279,9 +281,8 @@ function entryDock(d) {
   const keys = ["7", "8", "9", "⌫", "4", "5", "6", "+", "1", "2", "3", "−", "清空", "0", ".", "日期"].map((k) => k === "日期" ? `<button class="op key-date" data-action="pick-date" aria-label="选择记账日期，当前${E(fullDate(d.date))}">${uiIcon("calendar")}<span>${dateLabel}</span></button>` : `<button class="${/[+−⌫]/.test(k) ? "op" : ""}" data-action="key" data-value="${k}" aria-label="${k === "⌫" ? "退格" : k}">${k}</button>`).join("");
   return `<section class="entry-dock ${state.entryDockEntering ? "entry-dock-enter" : ""}" aria-label="记账输入">
     <div class="entry-amount-card"><div class="eyebrow">${typeName(d.type)}金额 · ${E(cName(d.categoryId))}</div><div id="expression" class="amount-editor ${d.expr.length > 13 ? "long" : ""}">¥ ${E(d.expr || "0.00")}</div><div id="entryError" class="error" role="alert">${E(d.error || "")}</div></div>
-    <textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
-    <div class="entry-location"><button class="plain" data-action="entry-location" ${d.locationPending ? "disabled" : ""}>${uiIcon("location")}${d.location ? "移除定位" : d.locationPending ? "正在定位…" : "添加定位（可选）"}</button>
-    <span class="micro" role="status">${E(d.locationStatus || (d.location ? "已添加，仅存本机账本" : ""))}</span></div>
+    <div class="entry-location"><textarea id="entryNote" class="entry-note" rows="1" maxlength="200" aria-label="备注（可选）" placeholder="备注　添加一点说明（可选）">${E(d.note)}</textarea>
+    <button class="plain place-picker-icon" data-action="entry-location" aria-label="选择地点" aria-pressed="${Boolean(d.location)}">${uiIcon("location")}</button></div>
     <div class="keys">${keys}</div><button class="primary entry-save" data-action="save-entry" ${state.saveBusy ? "disabled" : ""}>${state.saveBusy ? "保存中…" : "保存记录"}</button></section>`;
 }
 function categoryRanks(entries, type, click = true) {
@@ -666,6 +667,20 @@ function modalHtml() {
     case "pickDate":
       body = dateModal(m);
       break;
+    case "bookingPlace": {
+      const point = m.location;
+      const coordinates = point ? point.latitude + "," + point.longitude : "";
+      body = '<h2>选择地点</h2>' + (point ? '<a class="outline place-map-link" target="_blank" rel="noopener noreferrer" href="https://www.openstreetmap.org/?mlat=' +
+        point.latitude + '&amp;mlon=' + point.longitude + '#map=17/' + point.latitude + '/' + point.longitude + '">在地图中查看当前位置</a>' +
+        '<button class="outline" data-action="use-booking-place" data-value="">只附入账坐标</button>' :
+        '<p class="micro" role="status">' + (m.loading ? "正在定位…" : "暂未获取当前位置，可以直接填写地点。") + '</p>') +
+        (coordinates ? m.names.map(name => '<button class="outline" data-action="use-booking-place" data-value="' + E(name) + '">' + E(name) + '</button>').join("") : "") +
+        '<label for="bookingPlaceName">自己填写地点</label><input class="field" id="bookingPlaceName" maxlength="120" value="' + E(m.name || "") +
+        '" placeholder="例如王府井"><button class="primary" data-action="use-booking-place" data-value="custom">使用填写的地点</button>' +
+        (m.selected ? '<button class="plain" data-action="remove-booking-place">移除定位</button>' : "") +
+        '<button class="plain" data-action="close-modal">关闭</button>';
+      break;
+    }
     case "category":
       body = `<h2>${m.id ? "编辑分类" : "新增分类"}</h2><label for="categoryName">名称（最多8字）</label><input class="field" id="categoryName" maxlength="8" ${isDiningCategory(cById(m.id)) ? "readonly" : ""} value="${E(m.name || "")}" placeholder="分类名称"><label for="categoryIcon">图标</label><select id="categoryIcon" class="field">${iconKeys.map((k) => `<option value="${k}" ${k === m.iconKey ? "selected" : ""}>${legacyIcons[k][1]}</option>`).join("")}</select><p id="categoryError" class="error"></p><button class="primary" data-action="save-category">保存分类</button>${m.id && !isDiningCategory(cById(m.id)) && !cById(m.id)?.isBuiltin && !m.inUse ? '<button class="outline danger" data-action="ask-remove-category">删除分类</button>' : ""}<button class="plain" data-action="close-modal">关闭</button>`;
       break;
@@ -1003,6 +1018,7 @@ function beginEntry(e = null, nativeTransition = false) {
     date: e?.businessDate || localToday(),
     note: e?.note || "",
     location: e?.location || null,
+    clues: e?.clues,
     error: "",
   };
   state.entryOrigin = state.page;
@@ -1031,33 +1047,36 @@ function draftChanged() {
 }
 function changeEntryLocation() {
   const draft = state.entry;
-  if (draft.location) {
-    draft.location = null;
-    draft.locationStatus = "";
-    render();
-    return;
+  if (!draft || state.saveBusy) return;
+  draft.note = $("#entryNote")?.value ?? draft.note;
+  openPlacePicker({ selected: Boolean(draft.location), apply: selected => {
+    if (state.entry !== draft) return;
+    draft.location = selected?.location || null;
+    if (selected?.name) {
+      draft.note = noteWithPlace(draft.note, selected.name);
+      draft.clues = cluesWithPlace(draft.clues, selected.name);
+    }
+  } });
+}
+async function openPlacePicker({ selected, apply }) {
+  modal({ kind: "bookingPlace", loading: true, selected, names: [], apply });
+  const picker = state.modal;
+  const location = await currentLedgerLocation();
+  if (state.modal !== picker) return;
+  picker.loading = false;
+  picker.location = location;
+  if (location) {
+    try {
+      const nearby = await queryEntries({ nearby: { origin: location, km: 2 } });
+      picker.names = [...new Set(nearby.flatMap(entry => [
+        [entry.location.city, entry.location.district].filter(Boolean).join(" · "), entry.location.district,
+      ]).filter(Boolean))].slice(0, 5);
+    } catch { /* The position and custom entry work independently. */ }
   }
-  if (draft.date !== localToday() || !navigator.geolocation) {
-    draft.locationStatus = draft.date !== localToday() ? "补记时请把实际消费地点写进备注。" : "当前浏览器不支持定位。";
+  if (state.modal === picker) {
+    picker.name = $("#bookingPlaceName")?.value || "";
     render();
-    return;
   }
-  draft.locationPending = true;
-  draft.locationStatus = "";
-  render();
-  const finish = (location, status) => {
-    if (state.page !== "entry" || state.entry !== draft) return;
-    draft.locationPending = false;
-    if (state.saveBusy) return;
-    draft.location = draft.date === localToday() ? location : null;
-    draft.locationStatus = draft.date === localToday() ? status : "补记时请把实际消费地点写进备注。";
-    render();
-  };
-  navigator.geolocation.getCurrentPosition(({ coords, timestamp }) => finish({
-    latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy,
-    capturedAt: new Date(timestamp).toISOString(),
-  }, ""), error => finish(null, error.code === 1 ? "没有定位权限，可以直接保存。" : "暂时无法定位，可以直接保存。"),
-  { maximumAge: 0, timeout: 8000 });
 }
 function back() {
   if (state.modal) {
@@ -1155,6 +1174,7 @@ async function saveEntry() {
       createdAt: old?.createdAt || now,
       updatedAt: now,
       location: d.location,
+      ...(d.clues?.length ? { clues: d.clues } : {}),
     };
     await putEntry(entry);
     state.detailEntry = entry;
@@ -1558,6 +1578,19 @@ async function handleAction(el) {
       case "entry-location":
         changeEntryLocation();
         break;
+      case "use-booking-place": {
+        const picker = state.modal;
+        const field = $("#bookingPlaceName");
+        const name = v === "custom" ? field.value.trim() : v || "";
+        if (v === "custom" && !name) { field.focus(); break; }
+        picker.apply({ name, location: picker.location || null });
+        closeModal();
+        break;
+      }
+      case "remove-booking-place":
+        state.modal.apply(null);
+        closeModal();
+        break;
       case "pick-date":
         modal({ kind: "pickDate", pending: state.entry.date, month: state.entry.date.slice(0, 7), mode: "calendar", input: state.entry.date, error: "" });
         break;
@@ -1623,7 +1656,6 @@ async function handleAction(el) {
         if (!isValidDate(m.pending)) break;
         if (state.entry.date !== m.pending && state.entry.location) {
           state.entry.location = null;
-          state.entry.locationStatus = "日期已修改，定位已清除。";
         }
         state.entry.date = m.pending;
         closeModal();

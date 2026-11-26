@@ -1,4 +1,4 @@
-import { cleanTerms } from "./ledger-search.js";
+import { cleanTerms, searchableClues } from "./ledger-search.js";
 
 export function programTerms(text) {
   const source = String(text || "").normalize("NFKC");
@@ -28,7 +28,7 @@ export function groupLedger(rows, dimension, order, limit) {
       const hour = new Date(entry.createdAt).getHours();
       if (Number.isFinite(hour)) values.set(String(hour), String(hour).padStart(2, "0") + ":00");
     } else {
-      for (const clue of entry.clues || []) {
+      for (const clue of searchableClues(entry)) {
         if (clue.type.normalize("NFKC").trim() !== dimension) continue;
         let label = clue.value.normalize("NFKC").trim().replace(/\s+/g, " ");
         if (dimension === "用餐时间" && /^(?:[01]?\d|2[0-3]):[0-5]\d$/.test(label)) {

@@ -1234,6 +1234,10 @@ body::-webkit-scrollbar,
 .detail-text { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
 .entry-location { display: flex; gap: 8px; align-items: center; }
 .entry-location button { display: flex; align-items: center; gap: 5px; min-height: 36px; font-size: .83rem; }
+.place-picker-icon { flex: 0 0 44px; min-width: 44px; min-height: 44px; justify-content: center; color: var(--brand-dark); }
+.place-picker-icon[aria-pressed="true"] { background: var(--soft); }
+.ai-composer .place-picker-icon { width: 44px; padding: 4px; font-size: 1.3rem; }
+.place-map-link { display: block; text-align: center; padding: 11px; text-decoration: none; }
 .ai-entry-link { width: 100%; padding: 0; border: 0; border-radius: 4px; background: none; color: inherit; text-align: left; }
 .ai-entry-link:is(:hover, :focus-visible) { background: var(--soft); }
 .ledger-rows .group-head {

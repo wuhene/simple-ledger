@@ -49,7 +49,7 @@ public final class LedgerDb extends SQLiteOpenHelper {
     /**
      * 打开简账本机数据库。
      */
-    public LedgerDb(Context context) { super(context, "simple-ledger.db", null, 2); }
+    public LedgerDb(Context context) { super(context, "simple-ledger.db", null, 3); }
 
     /**
      * 建立账本与索引表。
@@ -80,6 +80,10 @@ public final class LedgerDb extends SQLiteOpenHelper {
                     + "SUM(CASE WHEN type='INCOME' THEN amount_minor ELSE 0 END), "
                     + "SUM(CASE WHEN type='EXPENSE' THEN amount_minor ELSE 0 END) FROM entries GROUP BY 1");
             repairDining(db);
+        } else if (oldVersion < 3) {
+            try (Cursor rows = db.query("entries", null, "location IS NOT NULL", null, null, null, null)) {
+                while (rows.moveToNext()) replaceTerms(db, readEntry(rows));
+            }
         }
     }
 
@@ -782,5 +786,36 @@ public final class LedgerDb extends SQLiteOpenHelper {
      */
     void setAssistantAutoBooking(boolean enabled) {
         putMeta(getWritableDatabase(), "assistantAutoBooking", String.valueOf(enabled));
+    }
+
+    /**
+     * 读取 AI 入账定位偏好。
+     */
+    boolean assistantAutoLocation() {
+        return Boolean.parseBoolean(meta("assistantAutoLocation", "false"));
+    }
+
+    /**
+     * 保存 AI 入账定位偏好。
+     */
+    void setAssistantAutoLocation(boolean enabled) {
+        putMeta(getWritableDatabase(), "assistantAutoLocation", String.valueOf(enabled));
+    }
+
+    /**
+     * 用纬度词元筛选候选并核验精确距离。
+     */
+    List<Entry> nearby(String start, String end, JSONObject origin, double km) {
+        double latitude = origin.optDouble("latitude"), span = LedgerLocation.latitudeSpan(km);
+        List<Entry> entries = new ArrayList<>();
+        try (Cursor rows = getReadableDatabase().rawQuery("SELECT e.* FROM entry_terms t JOIN entries e ON t.entry_id=e.id "
+                + "WHERE t.token BETWEEN ? AND ? AND t.business_date BETWEEN ? AND ?",
+                new String[]{LedgerLocation.latitudeKey(latitude - span), LedgerLocation.latitudeKey(latitude + span), start, end})) {
+            while (rows.moveToNext()) {
+                Entry entry = readEntry(rows);
+                if (LedgerLocation.within(origin, entry.location, km)) entries.add(entry);
+            }
+        }
+        return entries;
     }
 }

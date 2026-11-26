@@ -101,7 +101,8 @@ export function validateIntent(intent, today) {
     const terms = cleanTerms(intent.terms), filters = cleanClues(intent.filters);
     const limit = intent.order === "amount-desc" ? rankLimit(intent.limit) || 10 : 0;
     const groupBy = typeof intent.groupBy === "string" ? intent.groupBy.normalize("NFKC").trim().slice(0, 24) : "";
-    const hasQuery = Boolean(terms.length || filters.length || limit || groupBy || intent.kind === "search");
+    const nearbyKm = Number.isFinite(intent.nearbyKm) && intent.nearbyKm >= .1 && intent.nearbyKm <= 100 ? intent.nearbyKm : 0;
+    const hasQuery = Boolean(terms.length || filters.length || limit || groupBy || nearbyKm || intent.kind === "search");
     const start = intent.start ?? (hasQuery ? "1900-01-01" : undefined);
     const end = intent.end ?? (hasQuery ? today : undefined);
     const { metric, category } = intent;
@@ -115,7 +116,7 @@ export function validateIntent(intent, today) {
       ? { start: compareStart, end: compareEnd } : null;
     return { kind: intent.kind, start, end: end > today ? today : end,
       metric: intent.kind === "insight" ? "expense" : intent.kind === "search" ? "overview" : metric,
-      category, comparison, text, terms, filters, limit,
+      category, comparison, text, terms, filters, limit, nearbyKm,
       groupBy, groupOrder: intent.groupOrder === "amount" ? "amount" : "count", groupLimit: rankLimit(intent.groupLimit) || 10,
       matchText: intent.matchText === true || (intent.matchText === undefined && !groupBy && terms.length > 0),
       order: limit ? "amount-desc" : intent.order === "latest" ? "latest" : "",

@@ -14,10 +14,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -44,12 +46,15 @@ final class LedgerAssistant {
     String input = "";
     private int persistedMessages;
     volatile String stage = "";
+    private final Context locationContext;
+    private JSONObject pickedPlace;
 
     /**
      * 载入共享提示词和最近会话。
      */
     LedgerAssistant(Context context, LedgerDb db) {
         this.db = db;
+        locationContext = context.getApplicationContext();
         try (InputStream stream = context.getAssets().open("assistant-prompt.txt");
              InputStream skills = context.getAssets().open("ledger-skill-catalog.txt")) {
             prompt = readText(stream, 40000) + "\n\n" + readText(skills, 20000);
@@ -86,6 +91,7 @@ final class LedgerAssistant {
      */
     synchronized void open(String id) {
         if (activeId != null && activeId.equals(id)) return;
+        pickedPlace = null;
         cancel();
         persist();
         JSONObject session = db.loadAssistantSession(id);
@@ -156,10 +162,18 @@ final class LedgerAssistant {
         JSONObject conversation;
         JSONObject previous;
         JSONObject oldPending;
+        JSONObject place;
         synchronized (this) {
+            JSONObject locationReply = recentLocationReply(text);
+            if (locationReply != null && token == generation) {
+                chat.put(locationReply);
+                persist();
+                return;
+            }
             conversation = context(text);
             previous = lastQuery;
             oldPending = pending;
+            place = pickedPlace;
         }
         JSONObject intent = request(conversation, token);
         String kind = intent.optString("kind");
@@ -181,6 +195,7 @@ final class LedgerAssistant {
                 }
                 nextDraft = object("type", type, "date", date, "amount", LedgerMath.money(minor).replace(",", ""),
                         "note", note, "sourceText", source, "categoryId", categoryId, "clues", cleanClues(intent.optJSONArray("clues")));
+                if (place != null) applyPickedPlace(nextDraft, place);
                 item = textItem(categoryId.isEmpty() ? "识别到一笔记录，请先选分类。" :
                         intent.optString("text", "识别到一笔记录，请核对后入账。"));
                 put(item, "steps", new JSONArray().put("生成记账草稿 · 等待确认"));
@@ -245,15 +260,23 @@ final class LedgerAssistant {
             default:
                 throw new IllegalArgumentException("模型没有返回可识别的记账或统计指令");
         }
+        JSONObject captured = nextDraft == null ? null : nextDraft.optJSONObject("location");
+        if (automatic && token == generation && nextDraft != null && !nextDraft.optString("categoryId").isEmpty()) {
+            if (captured == null && !nextDraft.optBoolean("locationOmitted") && db.assistantAutoLocation()) {
+                stage = "正在获取入账位置";
+                captured = captureBookingLocation();
+            }
+        }
         synchronized (this) {
             if (token != generation) return;
+            if (nextDraft != null && pickedPlace == place) pickedPlace = null;
             lastQuery = nextQuery;
             pending = nextPending;
             if (automatic && nextDraft != null && !nextDraft.optString("categoryId").isEmpty()) {
                 stage = "正在校验并保存流水";
                 try {
                     bookDraft(nextDraft, nextDraft.getString("amount"), nextDraft.getString("date"),
-                            nextDraft.getString("categoryId"), nextDraft.getString("note"), nextDraft.optJSONArray("clues"), true);
+                            nextDraft.getString("categoryId"), nextDraft.getString("note"), nextDraft.optJSONArray("clues"), captured, true);
                     return;
                 } catch (RuntimeException | JSONException error) {
                     item = textItem("自动记账未能保存，可以核对草稿后重试。");
@@ -269,15 +292,19 @@ final class LedgerAssistant {
     /**
      * 将当前草稿写入账本并保存对应回执。
      */
-    synchronized void saveDraft(String amount, String date, String categoryId, String note, String clueText) throws Exception {
-        if (draft == null) return;
+    void saveDraft(JSONObject expected, String amount, String date, String categoryId, String note, String clueText) throws Exception {
         JSONArray clues = new JSONArray();
         for (String line : clueText.split("\\r?\\n")) {
             int divider = line.indexOf('：');
             if (divider < 0) divider = line.indexOf(':');
             if (divider > 0) clues.put(object("type", line.substring(0, divider), "value", line.substring(divider + 1)));
         }
-        bookDraft(draft, amount, date, categoryId, note, clues, false);
+        JSONObject location = expected.optJSONObject("location");
+        if (location == null && !expected.optBoolean("locationOmitted")) location = captureBookingLocation();
+        synchronized (this) {
+            if (draft != expected || draft == null) throw new IllegalArgumentException("草稿已切换或取消");
+            bookDraft(draft, amount, date, categoryId, note, clues, location, false);
+        }
     }
 
     /**
@@ -388,7 +415,8 @@ final class LedgerAssistant {
                 refs.put(ref);
                 turn = object("role", "assistant", "resultId", id);
             } else if ("text".equals(item.optString("kind"))) {
-                turn = object("role", item.optBoolean("user") ? "user" : "assistant", "text", clip(item.optString("text"), 320));
+                turn = object("role", item.optBoolean("user") ? "user" : "assistant", "text",
+                        item.optBoolean("localOnly") ? "已在本机核对入账定位。" : clip(item.optString("text"), 320));
             } else if ("receipt".equals(item.optString("kind"))) {
                 JSONObject entry = item.optJSONObject("entry");
                 turn = object("role", "assistant", "recordState", item.optBoolean("undone") ? "undone" : "saved",
@@ -447,8 +475,10 @@ final class LedgerAssistant {
         if (rank.find()) limit = rankNumber(rank.group(1));
         JSONArray terms = intent.optJSONArray("terms");
         JSONArray filters = cleanClues(intent.optJSONArray("filters"));
-        JSONArray programWords = LedgerSkills.programTerms(text);
-        boolean full = limit > 0 || !groupBy.isEmpty() || "search".equals(kind) || filters.length() > 0 || (terms != null && terms.length() > 0);
+        double km = intent.optDouble("nearbyKm", 0);
+        if (!(km >= .1 && km <= 100)) km = 0;
+        JSONArray programWords = km > 0 ? new JSONArray() : LedgerSkills.programTerms(text);
+        boolean full = km > 0 || limit > 0 || !groupBy.isEmpty() || "search".equals(kind) || filters.length() > 0 || (terms != null && terms.length() > 0);
         String start = intent.optString("start", full ? "1900-01-01" : LedgerMath.month(LedgerMath.today()) + "-01");
         String end = intent.optString("end", LedgerMath.today());
         LocalDate first = LocalDate.parse(start), last = LocalDate.parse(end), today = LocalDate.parse(LedgerMath.today());
@@ -459,11 +489,11 @@ final class LedgerAssistant {
         if (limit > 0) { order = "amount-desc"; view = "entries"; }
         if ("search".equals(kind)) {
             view = "entries";
-            if (filters.length() == 0 && (terms == null || terms.length() == 0) && programWords.length() == 0) throw new IllegalArgumentException("请提供查找的关键词");
+            if (km == 0 && filters.length() == 0 && (terms == null || terms.length() == 0) && programWords.length() == 0) throw new IllegalArgumentException("请提供查找的关键词");
         }
         if (!groupBy.isEmpty()) { view = "groupRank"; order = ""; limit = 0; }
         return object("kind", kind, "start", first.toString(), "end", last.toString(), "metric", metric,
-                "category", clip(intent.optString("category"), 12), "terms", terms, "filters", filters, "order", order,
+                "category", clip(intent.optString("category"), 12), "terms", terms, "filters", filters, "order", order, "nearbyKm", km,
                 "programTerms", programWords, "matchText", intent.optBoolean("matchText") || (!intent.has("matchText") && groupBy.isEmpty() && terms != null && terms.length() > 0), "groupBy", groupBy,
                 "groupOrder", "amount".equals(intent.optString("groupOrder")) ? "amount" : "count",
                 "groupLimit", Math.max(1, Math.min(50, intent.optInt("groupLimit", 10))),
@@ -501,11 +531,19 @@ final class LedgerAssistant {
         for (LedgerDb.Category cat : db.categories(null, true)) names.put(cat.id, cat.name);
         JSONArray steps = new JSONArray();
         String dimension = query.optString("groupBy");
-        boolean useText = "search".equals(query.optString("kind")) || query.optBoolean("matchText")
+        double km = query.optDouble("nearbyKm", 0);
+        JSONObject origin = null;
+        if (km > 0) {
+            addStep(token, steps, "定位当前位置");
+            origin = LedgerLocation.capture(locationContext, false);
+            if (origin == null) throw new IllegalArgumentException("无法获取当前位置，请先在 AI 助手设置中允许定位。");
+            addStep(token, steps, "按入账坐标筛选 · " + km + " 公里内");
+        }
+        boolean useText = (km == 0 && "search".equals(query.optString("kind"))) || query.optBoolean("matchText")
                 || dimension.isEmpty() && category.isEmpty() && (filters == null || filters.length() == 0) && !terms.isEmpty();
         JSONArray programWords = query.optJSONArray("programTerms");
         addStep(token, steps, "查流水 · " + (useText ? "双路关键词取并集" : "按条件查询完整范围"));
-        List<LedgerDb.Entry> rows = scoped(start, end, typeFilter, category, names, terms, filters, programWords, useText, !dimension.isEmpty());
+        List<LedgerDb.Entry> rows = scoped(start, end, typeFilter, category, names, terms, filters, programWords, useText, !dimension.isEmpty(), origin, km);
         addStep(token, steps, "汇总账本 · " + rows.size() + " 笔符合条件");
         long income = 0, expense = 0, largest = 0, sideTotal = 0;
         Map<String, Long> byCategory = new HashMap<>();
@@ -528,7 +566,7 @@ final class LedgerAssistant {
         Comparator<LedgerDb.Entry> latest = Comparator.comparing((LedgerDb.Entry entry) -> entry.businessDate).reversed()
                 .thenComparing(entry -> entry.createdAt, Comparator.reverseOrder()).thenComparing(entry -> entry.id);
         if ("amount-desc".equals(order)) rows.sort(Comparator.comparingLong((LedgerDb.Entry entry) -> entry.amountMinor).reversed().thenComparing(latest));
-        else if (!"search".equals(query.optString("kind")) || "latest".equals(order)) rows.sort(latest);
+        else if (km > 0 || !"search".equals(query.optString("kind")) || "latest".equals(order)) rows.sort(latest);
         JSONArray shown = new JSONArray();
         int limit = query.optInt("limit");
         for (int i = 0; i < Math.min(rows.size(), limit > 0 ? limit : 20); i++) {
@@ -557,7 +595,7 @@ final class LedgerAssistant {
         }
         if (LedgerMath.validDate(a) && LedgerMath.validDate(b) && a.compareTo(b) <= 0) {
             addStep(token, steps, "对比账期 · " + a + " 至 " + b);
-            List<LedgerDb.Entry> prior = scoped(a, b, typeFilter, category, names, terms, filters, programWords, useText, false);
+            List<LedgerDb.Entry> prior = scoped(a, b, typeFilter, category, names, terms, filters, programWords, useText, false, origin, km);
             long previousIncome = 0, previousExpense = 0;
             Set<String> dates = new LinkedHashSet<>();
             for (LedgerDb.Entry entry : prior) {
@@ -582,9 +620,18 @@ final class LedgerAssistant {
      * 应用日期、收支类型、分类与精确线索筛选。
      */
     private List<LedgerDb.Entry> scoped(String start, String end, String type, String category, Map<String, String> names,
-                                        List<String> terms, JSONArray filters, JSONArray programWords, boolean useText, boolean needsClues) {
-        List<LedgerDb.Entry> rows = needsClues && !useText && (filters == null || filters.length() == 0)
-                ? db.entries(start, end, type, null) : LedgerSkills.recall(db, start, end, type, terms, programWords, filters, useText);
+                                        List<String> terms, JSONArray filters, JSONArray programWords, boolean useText,
+                                        boolean needsClues, JSONObject origin, double km) {
+        List<LedgerDb.Entry> rows;
+        if (origin != null) {
+            rows = db.nearby(start, end, origin, km);
+            rows.removeIf(entry -> (type != null && !type.equals(entry.type))
+                    || LedgerIndex.score(entry, Collections.emptyList(), filters) < 0
+                    || (useText && !terms.isEmpty() && terms.stream().noneMatch(term -> LedgerIndex.score(entry, Collections.singletonList(term), null) >= 0)));
+        } else {
+            rows = needsClues && !useText && (filters == null || filters.length() == 0)
+                    ? db.entries(start, end, type, null) : LedgerSkills.recall(db, start, end, type, terms, programWords, filters, useText);
+        }
         if (!category.isEmpty()) rows.removeIf(entry -> !category.equals(names.get(entry.categoryId)));
         return rows;
     }
@@ -600,7 +647,9 @@ final class LedgerAssistant {
         if (db.hideAmounts()) message = "账本金额已隐藏，可以查看这次查询的日期和记录。";
         else if (count == 0) message = "这段时间没有找到符合条件的记录。";
         else if ("amount-desc".equals(query.optString("order"))) message = "按金额从高到低列出前 " + shown + " 笔。";
-        else if ("search".equals(query.optString("kind"))) message = "找到 " + count + " 笔相关流水，点击可查看详情。";
+        else if ("search".equals(query.optString("kind"))) message = "找到 " + count
+                + (query.optDouble("nearbyKm", 0) > 0 ? " 笔在当前位置 " + query.optDouble("nearbyKm") + " 公里内入账的流水。"
+                : " 笔相关流水，点击可查看详情。");
         else message = "匹配 " + count + " 笔，收入 ¥" + LedgerMath.money(facts.optLong("incomeMinor"))
                     + "，支出 ¥" + LedgerMath.money(facts.optLong("expenseMinor")) + "。";
         JSONArray result = new JSONArray().put(object("type", "paragraph", "text", message));
@@ -760,6 +809,7 @@ final class LedgerAssistant {
     private LedgerAssistant(LedgerAssistant source) {
         db = source.db;
         prompt = source.prompt;
+        locationContext = source.locationContext;
     }
 
     /**
@@ -839,7 +889,7 @@ final class LedgerAssistant {
      * 在同一事务内保存流水和会话回执。
      */
     private void bookDraft(JSONObject source, String amount, String date, String categoryId, String note,
-                           JSONArray clues, boolean automatic) throws JSONException {
+                           JSONArray clues, JSONObject location, boolean automatic) throws JSONException {
         LedgerDb.Category category = db.findCategory(categoryId);
         if (category == null || category.hidden || !category.type.equals(source.optString("type"))) {
             throw new IllegalArgumentException("请选择可用分类");
@@ -852,6 +902,7 @@ final class LedgerAssistant {
         entry.note = note.trim();
         entry.sourceText = source.optString("sourceText");
         entry.clues = cleanClues(clues);
+        entry.location = location;
         android.database.sqlite.SQLiteDatabase transaction = db.getWritableDatabase();
         int oldChatLength = chat.length();
         int oldPersisted = persistedMessages;
@@ -874,5 +925,91 @@ final class LedgerAssistant {
             persistedMessages = oldPersisted;
             throw error;
         }
+    }
+
+    /**
+     * 根据设备偏好采集一次入账位置。
+     */
+    private JSONObject captureBookingLocation() {
+        if (!db.assistantAutoLocation()) return null;
+        return LedgerLocation.capture(locationContext, true);
+    }
+
+    /**
+     * 从本机读取最近一笔未撤销回执的实际地点。
+     */
+    private JSONObject recentLocationReply(String text) {
+        if (!text.matches("(?s).*(?:刚才|刚刚|上笔|上一笔|这笔).*(?:位置|地点|在哪|定位|坐标).*")
+                && !text.matches("(?:你)?(?:没(?:有)?|有)?记录坐标[吗么？?。]*")) return null;
+        for (int i = chat.length() - 1; i >= 0; i--) {
+            JSONObject item = chat.optJSONObject(i);
+            if (item == null || !"receipt".equals(item.optString("kind")) || item.optBoolean("undone")) continue;
+            LedgerDb.Entry entry = db.findEntry(item.optJSONObject("entry").optString("id"));
+            if (entry == null) return object("kind", "text", "text", "这笔流水已经不存在。", "localOnly", true);
+            List<String> names = new ArrayList<>();
+            for (int j = 0; entry.clues != null && j < entry.clues.length(); j++) {
+                JSONObject clue = entry.clues.optJSONObject(j);
+                if (clue != null && clue.optString("type").matches("城市|区县|地点|商家")) names.add(clue.optString("value"));
+            }
+            String answer = names.isEmpty() ? "这笔账没有明确的消费地点线索。" : "你提到的消费地点线索是 " + String.join(" · ", names) + "。";
+            JSONObject point = entry.location;
+            if (point == null) answer += "这笔未保存入账定位。";
+            else {
+                String name = (point.optString("city") + " " + point.optString("district")).trim();
+                answer += "入账时保存了手机定位" + (name.isEmpty() ? "" : "（" + name + "）") + String.format(Locale.CHINA,
+                        "，坐标为 %.5f, %.5f，精度约 %.0f 米。", point.optDouble("latitude"), point.optDouble("longitude"), point.optDouble("accuracy"));
+            }
+            return object("kind", "text", "text", answer, "localOnly", true);
+        }
+        return null;
+    }
+
+    /**
+     * 保存待使用的一次性地点选择。
+     */
+    synchronized void pickPlace(String name, JSONObject location) {
+        JSONObject place = object("name", name, "location", location);
+        if (draft == null) pickedPlace = place;
+        else {
+            applyPickedPlace(draft, place);
+            persist();
+        }
+    }
+
+    /**
+     * 返回当前聊天中尚未用于记账的地点。
+     */
+    synchronized String pickedPlaceName() {
+        if (pickedPlace == null) return "";
+        return pickedPlace.optString("name");
+    }
+
+    /**
+     * 判断当前聊天是否有手动选中的地点或坐标。
+     */
+    synchronized boolean hasPickedPlace() {
+        return (pickedPlace != null && !pickedPlace.optBoolean("omit")) || (draft != null && draft.optJSONObject("location") != null);
+    }
+
+    /**
+     * 移除待入账的手动定位。
+     */
+    synchronized void clearPickedPlace() {
+        if (draft == null) pickedPlace = object("omit", true);
+        else {
+            draft.remove("location");
+            put(draft, "locationOmitted", true);
+            persist();
+        }
+    }
+
+    /**
+     * 将选择地点追加到草稿且保留用户原话里的消费地点优先级。
+     */
+    private void applyPickedPlace(JSONObject target, JSONObject place) {
+        String name = place.optString("name");
+        JSONArray clues = target.optJSONArray("clues");
+        put(target, "clues", LedgerLocation.cluesWithPlace(clues, name), "note", LedgerLocation.noteWithPlace(target.optString("note"), name),
+                "location", place.optJSONObject("location"), "locationOmitted", place.optBoolean("omit"));
     }
 }

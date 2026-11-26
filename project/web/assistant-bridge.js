@@ -110,6 +110,7 @@ async function proxy(req, res) {
       groupBy: shortText(previous.groupBy, 24) || undefined,
       groupOrder: ["count", "amount"].includes(previous.groupOrder) ? previous.groupOrder : undefined,
       matchText: previous.matchText === true,
+      nearbyKm: Number.isFinite(previous.nearbyKm) && previous.nearbyKm >= .1 && previous.nearbyKm <= 100 ? previous.nearbyKm : undefined,
       ...(previous.order === "amount-desc" ? { order: previous.order, limit: rankLimit(previous.limit) || 10 } : {}),
       ...(previous.terms?.length ? { terms: cleanTerms(previous.terms) } : {}),
       ...(previous.filters?.length ? { filters: cleanClues(previous.filters) } : {}) },

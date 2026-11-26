@@ -102,6 +102,9 @@ public final class MainActivity extends Activity {
     private final Typeface normalFace = Typeface.create("sans-serif", Typeface.NORMAL);
     private final Typeface strongFace = Build.VERSION.SDK_INT >= 28
             ? Typeface.create(normalFace, 650, false) : Typeface.create(normalFace, Typeface.BOLD);
+    private boolean assistantSaving;
+    private static final int ASSISTANT_LOCATION = 46;
+    private boolean pickingForAssistant;
 
     private static final class Page { final String name, id; int scroll, firstRow, rowOffset; Page(String name, String id) { this.name = name; this.id = id; } }
 
@@ -532,8 +535,11 @@ public final class MainActivity extends Activity {
         detailMetric(facts, "分类", categoryName);
         detailMetric(facts, "日期", entry.businessDate);
         detailMetric(facts, "备注", entry.note.isEmpty() ? "无" : entry.note);
-        if (entry.location != null) detailMetric(facts, "定位", String.format(Locale.ROOT, "%.5f, %.5f · 约 %.0f 米",
-                entry.location.optDouble("latitude"), entry.location.optDouble("longitude"), entry.location.optDouble("accuracy")));
+        if (entry.location != null) {
+            String place = (entry.location.optString("city") + " " + entry.location.optString("district")).trim();
+            detailMetric(facts, "入账定位", (place.isEmpty() ? "" : place + "\n") + String.format(Locale.ROOT, "%.5f, %.5f · 约 %.0f 米",
+                    entry.location.optDouble("latitude"), entry.location.optDouble("longitude"), entry.location.optDouble("accuracy")));
+        }
         if (entry.sourceText != null) detailMetric(facts, "记账原话", entry.sourceText);
         if (entry.clues != null && entry.clues.length() > 0) detailMetric(facts, "检索线索", clueLines(entry.clues));
         detailMetric(facts, "创建", localTimestamp(entry.createdAt));
@@ -1018,7 +1024,7 @@ public final class MainActivity extends Activity {
         compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
         compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
                 "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
-        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.5。流水保存在手机本机。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.6。流水保存在手机本机。"));
         addCard(body, options);
     }
     /**
@@ -1922,13 +1928,9 @@ public final class MainActivity extends Activity {
         amountRow.addView(amountView, new LinearLayout.LayoutParams(0, dp(44), 1.35f));
         dock.addView(amountRow);
         noteView = editField("备注  添加一点说明（可选）", draft.note, 200, true);
-        dock.addView(noteView, lp(-1, 44));
         LinearLayout location = row();
-        TextView locate = ghost(draft.location != null ? "移除定位" : locating ? "正在定位…" : "添加定位（可选）", this::changeLocation);
-        locate.setEnabled(!locating);
-        locate.setTextSize(13);
-        location.addView(locate, lp(-2, 38));
-        if (draft.location != null) location.addView(text("  已添加，仅存本机账本", 12, MUTED, false));
+        location.addView(noteView, new LinearLayout.LayoutParams(0, dp(44), 1));
+        location.addView(placeIcon(draft.location != null), lp(44, 44));
         dock.addView(location);
         LinearLayout keypad = column();
         keypad.setBackground(outline(LINE, 10, LINE));
@@ -2120,6 +2122,7 @@ public final class MainActivity extends Activity {
         padding(bar, 4, 4);
         bar.setGravity(Gravity.BOTTOM);
         bar.setBackground(outline(0xfff7f8fa, 17, LINE));
+        bar.addView(placeIcon(assistant.hasPickedPlace()), lp(44, 44));
         assistantComposer = editField("输入一笔账，或聊聊花销", assistant.input, 600, false);
         assistantComposer.setBackgroundColor(Color.TRANSPARENT);
         assistantComposer.setMinHeight(dp(44));
@@ -2160,6 +2163,11 @@ public final class MainActivity extends Activity {
         send.setMinimumHeight(dp(44));
         bar.addView(send, action);
         dock.addView(bar);
+        if (!assistant.pickedPlaceName().isEmpty()) {
+            TextView place = text("地点 · " + assistant.pickedPlaceName(), 12, MUTED, false);
+            place.setPadding(dp(8), dp(3), 0, 0);
+            dock.addView(place);
+        }
         shell.addView(dock);
     }
 
@@ -2168,7 +2176,7 @@ public final class MainActivity extends Activity {
      */
     private void sendAssistant(String value) {
         String message = value.trim();
-        if (message.isEmpty() || assistantBusy) return;
+        if (message.isEmpty() || assistantBusy || assistantSaving) return;
         if (!assistant.configured()) {
             assistant.input = message;
             navigate("assistantSettings", null);
@@ -2242,6 +2250,11 @@ public final class MainActivity extends Activity {
         bookingMode.setSelection(db.assistantAutoBooking() ? 1 : 0);
         form.addView(bookingMode, lp(-1, 48));
         form.addView(text("自动记账会直接保存信息完整的流水，保存后可在聊天中撤销。", 13, MUTED, false));
+        android.widget.CheckBox attachLocation = new android.widget.CheckBox(this);
+        attachLocation.setText("AI 入账时附上当前位置");
+        attachLocation.setChecked(db.assistantAutoLocation());
+        form.addView(attachLocation);
+        form.addView(text("和你说的消费地点分别记录。定位不可用时仍可入账。", 13, MUTED, false));
         space(form, 10);
         form.addView(text("模型会收到输入、必要的会话上下文和相关汇总。原始流水、备注和定位由本机处理。配置在本次运行中有效。", 13, MUTED, false));
         space(form, 14);
@@ -2264,6 +2277,11 @@ public final class MainActivity extends Activity {
         actions.addView(button("保存设置", true, () -> {
             try {
                 db.setAssistantAutoBooking(bookingMode.getSelectedItemPosition() == 1);
+                db.setAssistantAutoLocation(attachLocation.isChecked());
+                if (attachLocation.isChecked() && !LedgerLocation.allowed(this)) {
+                    requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION,
+                            android.Manifest.permission.ACCESS_COARSE_LOCATION}, ASSISTANT_LOCATION);
+                }
                 if (base.getText().toString().trim().isEmpty() && model.getText().toString().trim().isEmpty()) {
                     status.setText("记账模式已保存。填写 API 地址和模型 ID 后即可使用助手。");
                     return;
@@ -2498,6 +2516,7 @@ public final class MainActivity extends Activity {
         labels.addView(text(undone ? "已撤销" : "已入账", 16, DARK, true));
         String note = entry.optString("note");
         if (!note.isEmpty()) labels.addView(text(note, 13, MUTED, false));
+        if (entry.optJSONObject("location") != null) labels.addView(text("已附入账定位", 13, MUTED, false));
         LinearLayout.LayoutParams labelSize = new LinearLayout.LayoutParams(0, -2, 1);
         labelSize.setMargins(dp(8), 0, dp(8), 0);
         main.addView(labels, labelSize);
@@ -2581,15 +2600,10 @@ public final class MainActivity extends Activity {
         space(card, 8);
         LinearLayout actions = row();
         actions.addView(button("确认入账", true, () -> {
-            try {
-                int selected = category.getSelectedItemPosition();
-                if (selected < 1) throw new IllegalArgumentException("请选择分类");
-                assistant.saveDraft(amount.getText().toString().trim(), date.getText().toString().trim(), categories.get(selected - 1).id,
-                        note.getText().toString(), clues.getText().toString());
-                hideKeyboard();
-                assistantFollowBottom = true;
-                render();
-            } catch (Exception error) { error(error); }
+            int selected = category.getSelectedItemPosition();
+            if (selected < 1) { success("请选择分类"); return; }
+            confirmAssistantDraft(draft, amount.getText().toString().trim(), date.getText().toString().trim(),
+                    categories.get(selected - 1).id, note.getText().toString(), clues.getText().toString());
         }), lp(86, 44));
         TextView cancel = ghost("取消草稿", () -> { assistant.discardDraft(); hideKeyboard(); assistantFollowBottom = true; render(); });
         cancel.setBackground(outline(WHITE, 14, LINE));
@@ -2604,17 +2618,10 @@ public final class MainActivity extends Activity {
      * 请求或移除当前这笔记录的位置。
      */
     private void changeLocation() {
-        if (draft == null || locating) return;
-        preserveNote();
-        if (draft.location != null) {
-            draft.location = null;
-            buildEntry();
-            return;
-        }
-        if (!LedgerMath.today().equals(draft.businessDate)) {
-            success("定位仅可添加到今天的记录");
-            return;
-        }
+        if (locating || assistantBusy || assistantSaving) return;
+        pickingForAssistant = "assistant".equals(page.name);
+        if (!pickingForAssistant && draft == null) return;
+        if (!pickingForAssistant) preserveNote();
         if (checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
                 && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             locationConsentPending = true;
@@ -2629,76 +2636,34 @@ public final class MainActivity extends Activity {
      */
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(request, permissions, grants);
+        if (request == ASSISTANT_LOCATION) {
+            if (!LedgerLocation.allowed(this)) success("定位权限未开启，仍可正常记账");
+            return;
+        }
         if (request != LOCATION || !locationConsentPending) return;
         locationConsentPending = false;
-        for (int grant : grants) {
-            if (grant == PackageManager.PERMISSION_GRANTED) { locateDraft(); return; }
-        }
-        success("定位权限未开启，仍可正常记账");
+        locateDraft();
     }
 
     /**
      * 读取系统定位并验证当前草稿仍可接收结果。
      */
-    @SuppressWarnings("deprecation")
     private void locateDraft() {
+        boolean forAssistant = pickingForAssistant;
         LedgerDb.Entry target = draft;
-        if (target == null || !LedgerMath.today().equals(target.businessDate)) return;
-        LocationManager manager = getSystemService(LocationManager.class);
-        if (manager == null) return;
-        String provider = LocationManager.NETWORK_PROVIDER;
-        if (!manager.isProviderEnabled(provider) && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) provider = LocationManager.GPS_PROVIDER;
-        if (!manager.isProviderEnabled(provider)) {
-            success("暂无可用定位，请打开手机定位");
-            return;
-        }
+        Page targetPage = page;
         int request = ++locationRequest;
         locating = true;
-        buildEntry();
-        android.os.Handler handler = new android.os.Handler(getMainLooper());
-        LocationListener listener = new LocationListener() {
-            /**
-             * 将定位结果写入仍有效的草稿。
-             */
-            @Override public void onLocationChanged(Location location) {
-                manager.removeUpdates(this);
-                if (!locating || draft != target || request != locationRequest) return;
+        if (LedgerLocation.allowed(this)) success("正在定位…");
+        new Thread(() -> {
+            JSONObject result = LedgerLocation.capture(this, true, true);
+            runOnUiThread(() -> {
+                if (request != locationRequest || isFinishing() || isDestroyed()) return;
                 locating = false;
-                preserveNote();
-                if (LedgerMath.today().equals(target.businessDate)) target.location = LedgerAssistant.object(
-                        "latitude", location.getLatitude(), "longitude", location.getLongitude(),
-                        "accuracy", location.getAccuracy(), "capturedAt", Instant.ofEpochMilli(location.getTime()).toString());
-                buildEntry();
-            }
-            /**
-             * 接收系统定位源启用通知。
-             */
-            @Override public void onProviderEnabled(String name) {}
-            /**
-             * 接收系统定位源停用通知。
-             */
-            @Override public void onProviderDisabled(String name) {}
-            /**
-             * 兼容旧版定位源状态通知。
-             */
-            @Override public void onStatusChanged(String name, int status, Bundle extras) {}
-        };
-        try {
-            manager.requestSingleUpdate(provider, listener, getMainLooper());
-            handler.postDelayed(() -> {
-                manager.removeUpdates(listener);
-                if (!locating || draft != target || request != locationRequest) return;
-                locating = false;
-                preserveNote();
-                buildEntry();
-                success("暂未获取定位，可以稍后重试");
-            }, 8000);
-        } catch (RuntimeException failure) {
-            locating = false;
-            buildEntry();
-            success("定位不可用，仍可正常记账");
-        }
+                if (forAssistant ? page != targetPage : draft != target || target == null) return;
+                showBookingPlacePicker(result, target, forAssistant);
+            });
+        }, "ledger-place-picker").start();
     }
 
     /**
@@ -3564,5 +3529,108 @@ public final class MainActivity extends Activity {
             case 3 -> 0xff503963;
             default -> 0xff523907;
         };
+    }
+
+    /**
+     * 在工作线程获取入账位置并保存确认草稿。
+     */
+    private void confirmAssistantDraft(JSONObject draft, String amount, String date, String category, String note, String clues) {
+        if (assistantSaving) return;
+        assistantSaving = true;
+        hideKeyboard();
+        new Thread(() -> {
+            Exception failure = null;
+            try { assistant.saveDraft(draft, amount, date, category, note, clues); }
+            catch (Exception error) { failure = error; }
+            Exception result = failure;
+            runOnUiThread(() -> {
+                assistantSaving = false;
+                if (isFinishing() || isDestroyed()) return;
+                if (result != null) { error(result); return; }
+                if ("assistant".equals(page.name)) {
+                    assistantFollowBottom = true;
+                    render();
+                }
+            });
+        }, "ledger-confirm-entry").start();
+    }
+
+    /**
+     * 绘制与备注或聊天输入框同排的地点入口。
+     */
+    private TextView placeIcon(boolean selected) {
+        TextView icon = ghost("⌖", this::changeLocation);
+        icon.setTextSize(22);
+        icon.setContentDescription("选择地点");
+        if (selected) icon.setBackground(shape(SOFT, 10));
+        return icon;
+    }
+
+    /**
+     * 显示当前位置候选、地图入口和自填地点。
+     */
+    private void showBookingPlacePicker(JSONObject point, LedgerDb.Entry target, boolean forAssistant) {
+        Dialog dialog = new Dialog(this);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout sheet = column();
+        padding(sheet, 20, 12);
+        sheet.setBackground(shape(WHITE, 22));
+        sheet.addView(text("选择地点", 19, DARK, true));
+        space(sheet, 8);
+        JSONArray choices = point == null ? null : point.optJSONArray("choices");
+        if (point == null) {
+            sheet.addView(text("暂未获取当前位置，可以直接填写地点。", 13, MUTED, false));
+        } else {
+            point.remove("choices");
+            for (int i = 0; choices != null && i < choices.length(); i++) {
+                String name = choices.optString(i).trim();
+                if (name.isEmpty() || name.length() > 120) continue;
+                sheet.addView(ghost(name, () -> chooseBookingPlace(dialog, target, forAssistant, name, point)));
+            }
+            sheet.addView(ghost("在地图中查看当前位置", () -> {
+                String coordinates = point.optDouble("latitude") + "," + point.optDouble("longitude");
+                try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("geo:" + coordinates + "?q=" + coordinates))); }
+                catch (android.content.ActivityNotFoundException unavailable) { success("手机上没有可打开的地图应用"); }
+            }));
+            sheet.addView(ghost("只附入账坐标", () -> chooseBookingPlace(dialog, target, forAssistant, "", point)));
+        }
+        EditText custom = editField("填写地点，例如王府井", "", 120, true);
+        sheet.addView(custom, lp(-1, 46));
+        space(sheet, 8);
+        sheet.addView(button("使用填写的地点", true, () -> {
+            String name = custom.getText().toString().trim();
+            if (name.isEmpty()) { custom.setError("请输入地点"); return; }
+            chooseBookingPlace(dialog, target, forAssistant, name, point);
+        }));
+        if (forAssistant ? assistant.hasPickedPlace() : target.location != null) {
+            sheet.addView(ghost("移除定位", () -> {
+                if (forAssistant) assistant.clearPickedPlace();
+                else target.location = null;
+                dialog.dismiss();
+                if (forAssistant) render();
+                else buildEntry();
+            }));
+        }
+        scroll.addView(sheet);
+        dialog.setContentView(scroll);
+        showBottomSheet(dialog, scroll);
+    }
+
+    /**
+     * 将选中的地点写入手动备注或 AI 草稿。
+     */
+    private void chooseBookingPlace(Dialog dialog, LedgerDb.Entry target, boolean forAssistant, String name, JSONObject point) {
+        if (forAssistant) {
+            assistant.pickPlace(name, point);
+            dialog.dismiss();
+            render();
+        } else {
+            preserveNote();
+            target.note = LedgerLocation.noteWithPlace(target.note, name);
+            target.clues = LedgerLocation.cluesWithPlace(target.clues, name);
+            target.location = point;
+            dialog.dismiss();
+            buildEntry();
+        }
     }
 }

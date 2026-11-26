@@ -1,9 +1,9 @@
 import { diningCategoryRepair, initialCategories, SCHEMA_VERSION, validateLedger } from "./model.js";
-import { cleanClues, cleanTerms, entryTokens, matchScore, queryTokens } from "./ledger-search.js";
+import { cleanClues, cleanTerms, entryTokens, latitudeWindow, matchScore, queryTokens, withinDistance } from "./ledger-search.js";
 import { applyEntry } from "./ledger-rollups.js";
 
 const DB_NAME = "simple-ledger";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 let dbPromise;
 
 function request(req) {
@@ -37,6 +37,8 @@ export function openDatabase() {
           tx.objectStore("meta").put(null, "asset");
         }
         const entries = tx.objectStore("entries");
+        entries.createIndex("locationLatitude", "location.latitude");
+        if (event.oldVersion >= 4) return;
         if (event.oldVersion < 3) {
           entries.createIndex("date", "businessDate");
           entries.createIndex("termDate", "searchKeys", { multiEntry: true });
@@ -138,12 +140,18 @@ async function updateMonthlyStats(tx, previous, next) {
   }
 }
 
-export async function queryEntries({ start = "1900-01-01", end = "9999-12-31", terms, filters } = {}) {
+export async function queryEntries({ start = "1900-01-01", end = "9999-12-31", terms, filters, nearby } = {}) {
   if (start > end) return [];
   terms = cleanTerms(terms);
   filters = cleanClues(filters);
   const db = await openDatabase();
   const store = db.transaction("entries").objectStore("entries");
+  if (nearby) {
+    const bounds = latitudeWindow(nearby.origin.latitude, nearby.km);
+    const candidates = await request(store.index("locationLatitude").getAll(IDBKeyRange.bound(...bounds)));
+    return candidates.map(publicEntry).filter(entry => entry.businessDate >= start && entry.businessDate <= end &&
+      withinDistance(nearby.origin, entry.location, nearby.km) && matchScore(entry, terms, filters) >= 0);
+  }
   const dateRange = IDBKeyRange.bound(start, end);
   const keys = queryTokens(terms, filters);
   if (!keys.length) return (await request(store.index("date").getAll(dateRange))).map(publicEntry)
