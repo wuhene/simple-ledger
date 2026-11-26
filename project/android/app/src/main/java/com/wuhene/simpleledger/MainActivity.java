@@ -39,6 +39,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
+import android.widget.ListView;
 import android.widget.Spinner;
 
 import org.json.JSONObject;
@@ -94,8 +96,11 @@ public final class MainActivity extends Activity {
     private int locationRequest;
     private int billYear = LocalDate.now().getYear();
     private boolean animateNavigation;
+    private View highlightedEntry;
+    private TextView saveStatus;
+    private ListView recordList;
 
-    private static final class Page { final String name, id; int scroll; Page(String name, String id) { this.name = name; this.id = id; } }
+    private static final class Page { final String name, id; int scroll, firstRow, rowOffset; Page(String name, String id) { this.name = name; this.id = id; } }
 
     /**
      * 初始化安全区、原生页面和本地账本。
@@ -153,7 +158,17 @@ public final class MainActivity extends Activity {
     /**
      * 生成有选中样式的分段按钮。
      */
-    private TextView segment(String label, boolean selected, Runnable action) { TextView b = text(label, 15, selected ? GREEN : MUTED, selected); b.setGravity(Gravity.CENTER); b.setBackground(shape(selected ? WHITE : SOFT, 14)); if (selected) b.setElevation(dp(1)); b.setMinHeight(dp(44)); b.setOnClickListener(v -> action.run()); return b; }
+    private TextView segment(String label, boolean selected, Runnable action) {
+        TextView button = text(label, 15, selected ? GREEN : MUTED, selected);
+        button.setGravity(Gravity.CENTER);
+        if (selected) {
+            button.setBackground(shape(WHITE, 14));
+            button.setElevation(dp(1));
+        }
+        button.setMinHeight(dp(44));
+        button.setOnClickListener(view -> action.run());
+        return button;
+    }
     private TextView ghost(String label, Runnable action) { TextView b = text(label, 15, GREEN, true); b.setGravity(Gravity.CENTER); b.setMinHeight(dp(44)); b.setOnClickListener(v -> action.run()); return b; }
     /**
      * 创建白底内容卡片。
@@ -179,10 +194,6 @@ public final class MainActivity extends Activity {
         render();
     }
     private void tab(String target) { page = new Page(target, null); history.clear(); render(); }
-    /**
-     * 显示原生页面标题。
-     */
-    private void header(LinearLayout body, String eyebrow, String title) { LinearLayout block = column(); padding(block, 20, 2); block.addView(text(title, 24, DARK, true)); space(block, 14); body.addView(block); }
     private void section(LinearLayout body, String label) { LinearLayout l = column(); padding(l, 24, 10); l.addView(text(label, 20, DARK, true)); body.addView(l); }
     /**
      * 显示带图标和说明的功能入口。
@@ -202,42 +213,67 @@ public final class MainActivity extends Activity {
     private void render() {
         if (!ready) return;
         if (renderedPage == page) keepScroll();
+        highlightedEntry = null;
+        saveStatus = null;
         host.removeAllViews();
         LinearLayout shell = column(); shell.setBackgroundColor(BG); host.addView(shell, new FrameLayout.LayoutParams(-1, -1));
+        if ("home".equals(page.name)) {
+            renderHomePage(shell);
+            return;
+        }
+        recordList = null;
         boolean chat = "assistant".equals(page.name);
         if (chat) renderAssistantHeader(shell);
         String secondaryTitle = switch (page.name) {
             case "detail" -> "记录详情";
             case "assets" -> "资产概览";
             case "bills" -> "账单";
+            case "budget" -> "月总预算";
+            case "report" -> billKind.equals("year") ? page.id.substring(0, 4) + "年账单" : monthLabel(page.id) + "账单";
+            case "categories" -> "分类管理";
+            case "settings" -> "设置与数据";
+            case "search" -> "搜索流水";
+            case "assistantSettings" -> "AI 助手设置";
+            case "assistantHistory" -> "历史会话";
+            case "tools" -> "工具";
+            case "me" -> "我的";
             default -> "";
         };
         if (!secondaryTitle.isEmpty()) renderSecondaryBar(shell, secondaryTitle);
+        if ("categoryDetail".equals(page.name)) {
+            renderCategoryDetail(shell);
+            return;
+        }
         if ("stats".equals(page.name)) {
             LinearLayout heading = row();
             padding(heading, 18, 6);
             heading.addView(text("统计", 22, DARK, true), new LinearLayout.LayoutParams(0, dp(48), 1));
-            heading.addView(eyeButton(GREEN), lp(46, 44));
+            View eye = eyeButton(DARK);
+            eye.setBackground(shape(SOFT, 15));
+            heading.addView(eye, lp(46, 44));
             shell.addView(heading);
         }
-        ScrollView scroll = "home".equals(page.name) ? new MonthScroll() : new ScrollView(this);
+        ScrollView scroll = new ScrollView(this);
         pageScroll = scroll;
         scroll.setFillViewport(true);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
         shell.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout body = column();
-        int topPadding = isMain() || chat ? 0 : secondaryTitle.isEmpty() ? 12 : "bills".equals(page.name) ? 22 : 28;
+        int topPadding = switch (page.name) {
+            case "detail", "assets" -> 28;
+            case "bills" -> 22;
+            case "assistant", "stats" -> 0;
+            default -> 14;
+        };
         body.setPadding(0, dp(topPadding), 0, dp(chat ? 8 : 24));
         scroll.addView(body);
         switch (page.name) {
-            case "home": renderHome(body); break;
             case "stats": renderStats(body); break;
             case "tools": renderTools(body); break;
             case "bills": renderBills(body); break;
             case "me": renderMe(body); break;
             case "detail": renderDetail(body); break;
-            case "categoryDetail": renderCategoryDetail(body); break;
             case "budget": renderBudget(body); break;
             case "assets": renderAssets(body); break;
             case "categories": renderCategories(body); break;
@@ -258,7 +294,7 @@ public final class MainActivity extends Activity {
             host.addView(latest, jump);
             scroll.setOnScrollChangeListener((view, x, y, previousX, previousY) ->
                     latest.setVisibility(scroll.getChildAt(0).getBottom() - y - scroll.getHeight() > dp(120) ? View.VISIBLE : View.GONE));
-            renderAssistantComposer(shell);
+            if (assistant.configured()) renderAssistantComposer(shell);
         }
         if (isMain()) renderTabs(shell);
         if ("home".equals(page.name) || "stats".equals(page.name)) addAssistantFab();
@@ -351,7 +387,7 @@ public final class MainActivity extends Activity {
     /**
      * 展示主题色月头、月度摘要和白底流水。
      */
-    private void renderHome(LinearLayout body) {
+    private void renderHome(LinearLayout body, int count) {
         LinearLayout hero = column();
         hero.setBackgroundColor(themeId == 0 ? ACTION : TOP);
         int headerInk = themeId == 0 ? ACTION_TEXT : TOP_TEXT;
@@ -388,17 +424,20 @@ public final class MainActivity extends Activity {
         summary.addView(numbers);
         addCard(hero, summary);
         body.addView(hero);
-        List<LedgerDb.Entry> rows = db.entries(month + "-01", monthEnd(month), null, null);
         LinearLayout heading = row();
         padding(heading, 20, 8);
         heading.addView(text("流水", 16, DARK, true), new LinearLayout.LayoutParams(0, -2, 1));
-        heading.addView(text(rows.size() + " 笔", 12, MUTED, false));
+        if (savedEntryId != null) {
+            saveStatus = text("✓ 已保存", 12, GREEN, true);
+            saveStatus.setPadding(0, 0, dp(8), 0);
+            heading.addView(saveStatus);
+        }
+        heading.addView(text(count + " 笔", 12, MUTED, false));
         TextView find = ghost("⌕", () -> navigate("search", null));
         find.setTextSize(24);
         find.setContentDescription("搜索全部流水");
         heading.addView(find, lp(44, 44));
         body.addView(heading);
-        entryList(body, rows);
     }
     /**
      * 按业务日期分组并展示带分类图标的流水。
@@ -428,7 +467,10 @@ public final class MainActivity extends Activity {
             LinearLayout line = row();
             padding(line, 8, 6);
             line.setMinimumHeight(dp(58));
-            if (e.id.equals(savedEntryId)) line.setBackground(shape(SOFT, 8));
+            if (e.id.equals(savedEntryId)) {
+                line.setBackground(shape(SOFT, 8));
+                highlightedEntry = line;
+            }
             line.addView(categoryBadge(cat, true, false), lp(32, 32));
             String name = cat == null ? "未知分类" : cat.name;
             LinearLayout left = column();
@@ -461,14 +503,14 @@ public final class MainActivity extends Activity {
         LinearLayout hero = card();
         hero.setGravity(Gravity.CENTER_HORIZONTAL);
         padding(hero, 20, 20);
-        hero.addView(text(income ? "收入" : "支出", 13, MUTED, false));
+        hero.addView(text(income ? "收入" : "支出", 13, MUTED, false), lp(-2, -2));
         space(hero, 14);
-        hero.addView(text((income ? "+" : "−") + money(entry.amountMinor), 34, income ? RED : DARK, true));
+        hero.addView(text((income ? "+" : "−") + money(entry.amountMinor), 34, income ? GREEN : DARK, true), lp(-2, -2));
         space(hero, 18);
         TextView category = text(categoryName, 12, GREEN, false);
         padding(category, 10, 4);
         category.setBackground(shape(0xffe7f1ec, 20));
-        hero.addView(category);
+        hero.addView(category, lp(-2, -2));
         addCard(body, hero);
 
         LinearLayout facts = card();
@@ -673,7 +715,21 @@ public final class MainActivity extends Activity {
         long highest = 0; String peakDay = "—"; for (Map.Entry<String, Long> item : byDay.entrySet()) if (item.getValue() > highest || item.getValue() == highest && item.getKey().compareTo(peakDay) < 0) { highest = item.getValue(); peakDay = item.getKey(); }
         space(c, 10); c.addView(text("日均  " + money(daily) + "   ·   单日最高  " + money(highest), 13, MUTED, false)); if (highest > 0) c.addView(text("最高日  " + peakDay, 12, MUTED, false)); addCard(body, c);
     }
-    private void renderCategoryDetail(LinearLayout body) { LedgerDb.Category cat = db.findCategory(page.id); if (cat == null) return; header(body, "分类明细", cat.name); String[] b = statsBounds(); entryList(body, db.entries(detailStart == null ? b[0] : detailStart, detailEnd == null ? b[1] : detailEnd, cat.type, cat.id)); }
+    /**
+     * 用可复用列表展示分类对应账期的明细。
+     */
+    private void renderCategoryDetail(LinearLayout shell) {
+        LedgerDb.Category category = db.findCategory(page.id);
+        if (category == null) return;
+        renderSecondaryBar(shell, category.name);
+        String[] bounds = statsBounds();
+        List<LedgerDb.Entry> records = db.statsEntries(detailStart == null ? bounds[0] : detailStart, detailEnd == null ? bounds[1] : detailEnd, category.type);
+        records.removeIf(entry -> !category.id.equals(entry.categoryId));
+        LinearLayout heading = column();
+        space(heading, 14);
+        if (records.isEmpty()) entryList(heading, records);
+        attachRecordList(shell, new ListView(this), heading, records);
+    }
     /**
      * 显示月度或年度账单的汇总与四列表格。
      */
@@ -735,13 +791,20 @@ public final class MainActivity extends Activity {
         }
         addCard(body, table);
     }
+    /**
+     * 展示当前账期的账单、预算和资产快捷入口。
+     */
     private void renderTools(LinearLayout body) {
-        menu(body, "账单", monthLabel(month) + " · 结余 " + money(db.totals(month + "-01", monthEnd(month)).balance()), () -> {
+        LinearLayout options = column();
+        padding(options, 20, 0);
+        compactMenu(options, "账单", monthLabel(month) + " · 结余 " + money(db.totals(month + "-01", monthEnd(month)).balance()), "▤", () -> {
             billYear = YearMonth.parse(month).getYear();
             navigate("bills", null);
         });
-        menu(body, "月总预算", "设置预算，查看已用与剩余", () -> navigate("budget", null));
-        menu(body, "资产概览", "手动维护资产与负债", () -> navigate("assets", null));
+        compactMenu(options, "月总预算", db.budget(month) > 0 ? "查看已用与剩余" : "设置本月预算", "◌", () -> navigate("budget", null));
+        String asset = db.hasAsset() ? "净资产 " + money(db.asset(false) - db.asset(true)) : "填写资产与负债";
+        compactMenu(options, "资产概览", asset, "◇", () -> navigate("assets", null));
+        body.addView(options);
     }
     /**
      * 展示月度或年度账单报告及图片入口。
@@ -751,10 +814,18 @@ public final class MainActivity extends Activity {
         boolean annual = billKind.equals("year");
         String start = annual ? reportingMonth.substring(0, 4) + "-01-01" : reportingMonth + "-01";
         String end = annual ? reportingMonth.substring(0, 4) + "-12-31" : monthEnd(reportingMonth);
-        header(body, "", annual ? reportingMonth.substring(0, 4) + "年账单" : monthLabel(reportingMonth) + "账单");
         if (start.compareTo(LedgerMath.today()) > 0) { LinearLayout empty = card(); empty.addView(text("未来月份暂无报告", 15, MUTED, false)); addCard(body, empty); return; }
-        LedgerDb.Totals t = db.totals(start, end); totalCard(body, t, start + " — " + end); List<LedgerDb.Entry> all = db.entries(start, end, null, null);
-        if (!annual) { String previous = LedgerMath.shiftMonth(reportingMonth, -1); LedgerDb.Totals prev = db.totals(previous + "-01", monthEnd(previous)); LinearLayout comparison = card(); comparison.addView(text("上月结余  " + money(prev.balance()), 16, DARK, true)); space(comparison, 8); comparison.addView(text("本月支出较上月  " + (t.expense >= prev.expense ? "增加 " : "减少 ") + money(Math.abs(t.expense - prev.expense)), 13, MUTED, false)); addCard(body, comparison); }
+        LedgerDb.Totals t = db.totals(start, end);
+        totalCard(body, t, (annual ? reportingMonth.substring(0, 4) + "年" : monthLabel(reportingMonth)) + "结余");
+        List<LedgerDb.Entry> all = db.statsEntries(start, end, null);
+        if (!annual) {
+            String previous = LedgerMath.shiftMonth(reportingMonth, -1);
+            LedgerDb.Totals prior = db.totals(previous + "-01", monthEnd(previous));
+            TextView caption = text("上月结余 " + money(prior.balance()) + " · "
+                    + (reportingMonth.equals(LedgerMath.month(LedgerMath.today())) ? "本月至今对比上月全月" : "本月全月对比上月全月"), 12, MUTED, false);
+            padding(caption, 20, 2);
+            body.addView(caption);
+        }
         reportTypeSection(body, all, LedgerDb.EXPENSE, "支出组成");
         if (!annual) renderReportRanking(body, all);
         section(body, annual ? "年度月趋势" : "本月日趋势"); List<LedgerDb.Entry> expense = new ArrayList<>(); for (LedgerDb.Entry e : all) if (e.type.equals(LedgerDb.EXPENSE)) expense.add(e); renderTrend(body, expense, start, end.compareTo(LedgerMath.today()) > 0 ? LedgerMath.today() : end, annual ? "year" : "month");
@@ -777,16 +848,53 @@ public final class MainActivity extends Activity {
         }
         LinearLayout action = column(); padding(action, 18, 8); action.addView(button("预览并保存报告图片", true, () -> shareReport(start, end, t)), lp(-1, 50)); body.addView(action);
     }
+    /**
+     * 展示收支分类组成、比例图例和明细入口。
+     */
     private void reportTypeSection(LinearLayout body, List<LedgerDb.Entry> all, String type, String title) {
         section(body, title); Map<String, Long> sums = new HashMap<>(); long total = 0;
         for (LedgerDb.Entry e : all) if (e.type.equals(type)) { sums.put(e.categoryId, sums.getOrDefault(e.categoryId, 0L) + e.amountMinor); total += e.amountMinor; }
         if (sums.isEmpty()) { LinearLayout empty = card(); empty.addView(text("暂无记录", 14, MUTED, false)); addCard(body, empty); return; }
         final long amount = total; List<Map.Entry<String, Long>> ranking = new ArrayList<>(sums.entrySet()); ranking.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
-        LinearLayout ringCard = card(); View ring = new View(this) { @Override protected void onDraw(Canvas canvas) { super.onDraw(canvas); int[] colors = {GREEN, 0xff74a989, 0xffb5caa8, 0xffddbb7e, 0xffe6d8b6, 0xffc3cbc4}; Paint p = new Paint(3); float cx = getWidth() / 2f, cy = getHeight() / 2f, radius = Math.min(getWidth(), getHeight()) * .43f; android.graphics.RectF rect = new android.graphics.RectF(cx - radius, cy - radius, cx + radius, cy + radius); float angle = -90;
-            long remainder = amount; for (int i = 0; i < Math.min(5, ranking.size()); i++) { long value = ranking.get(i).getValue(); p.setColor(colors[i]); float sweep = value * 360f / amount; canvas.drawArc(rect, angle, sweep, true, p); angle += sweep; remainder -= value; } if (remainder > 0) { p.setColor(colors[5]); canvas.drawArc(rect, angle, remainder * 360f / amount, true, p); }
-            p.setColor(WHITE); canvas.drawCircle(cx, cy, radius * .58f, p); p.setColor(DARK); p.setTextSize(dp(18)); p.setTypeface(Typeface.DEFAULT_BOLD); String label = money(amount); canvas.drawText(label, cx - p.measureText(label) / 2, cy + dp(6), p);
-        } }; ringCard.addView(ring, lp(-1, 190)); addCard(body, ringCard);
-        for (Map.Entry<String, Long> item : ranking) { LedgerDb.Category cat = db.findCategory(item.getKey()); if (cat == null) continue; menu(body, cat.name + "  ·  " + String.format(Locale.CHINA, "%.1f%%", item.getValue() * 100d / amount), money(item.getValue()), () -> { String reportMonth = page.id; detailStart = billKind.equals("year") ? reportMonth.substring(0, 4) + "-01-01" : reportMonth + "-01"; detailEnd = billKind.equals("year") ? reportMonth.substring(0, 4) + "-12-31" : monthEnd(reportMonth); navigate("categoryDetail", cat.id); }); }
+        Map<String, LedgerDb.Category> categories = new HashMap<>();
+        for (LedgerDb.Category category : db.categories(type, true)) categories.put(category.id, category);
+        if (LedgerDb.EXPENSE.equals(type)) addCard(body, reportDonut(ranking, categories, amount));
+        LinearLayout rows = card();
+        String reportMonth = page.id;
+        boolean annual = "year".equals(billKind);
+        for (Map.Entry<String, Long> item : ranking) {
+            LedgerDb.Category category = categories.get(item.getKey());
+            if (category == null) continue;
+            LinearLayout group = column();
+            padding(group, 0, 6);
+            LinearLayout line = row();
+            line.addView(categoryBadge(category, true, false), lp(31, 31));
+            TextView label = text(category.name, 14, DARK, false);
+            label.setPadding(dp(8), 0, 0, 0);
+            line.addView(label, new LinearLayout.LayoutParams(0, dp(34), 1));
+            line.addView(text(money(item.getValue()), 14, DARK, true));
+            if (!hidden) {
+                TextView percent = text(String.format(Locale.ROOT, "%.1f%%", item.getValue() * 100d / amount), 12, MUTED, false);
+                percent.setPadding(dp(7), 0, 0, 0);
+                line.addView(percent);
+            }
+            group.addView(line);
+            if (!hidden) {
+                android.widget.ProgressBar bar = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+                bar.setMax(1000);
+                bar.setProgress((int) (item.getValue() * 1000 / amount));
+                bar.setProgressTintList(android.content.res.ColorStateList.valueOf(GREEN));
+                group.addView(bar, lp(-1, 6));
+            }
+            group.setOnClickListener(view -> {
+                detailStart = annual ? reportMonth.substring(0, 4) + "-01-01" : reportMonth + "-01";
+                detailEnd = annual ? reportMonth.substring(0, 4) + "-12-31" : monthEnd(reportMonth);
+                navigate("categoryDetail", category.id);
+            });
+            if (rows.getChildCount() > 0) rule(rows, 0xffedf1ee);
+            rows.addView(group);
+        }
+        addCard(body, rows);
     }
     private void reportCategoryChanges(LinearLayout body, List<LedgerDb.Entry> current) {
         String reportMonth = page.id;
@@ -876,25 +984,33 @@ public final class MainActivity extends Activity {
      * 展示记账成就和账户内的使用入口。
      */
     private void renderMe(LinearLayout body) {
-        space(body, 8);
         LinearLayout profile = card();
-        profile.addView(text("认真记录每一天", 17, DARK, true));
-        profile.addView(text("爱记账 · 本地账本", 13, MUTED, false));
+        LinearLayout identity = row();
+        TextView icon = text("账", 22, GREEN, true);
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackground(shape(SOFT, 16));
+        identity.addView(icon, lp(52, 52));
+        LinearLayout labels = column();
+        labels.setPadding(dp(10), 0, 0, 0);
+        labels.addView(text("认真记录每一天", 15, DARK, true));
+        labels.addView(text("爱记账 · 本地账本", 12, MUTED, false));
+        identity.addView(labels);
+        profile.addView(identity);
         addCard(body, profile);
         renderAchievements(body);
-        menu(body, "分类管理", "调整分类与显示状态", () -> navigate("categories", null));
-        menu(body, "设置与数据", "主题、AI 模型和备份", () -> navigate("settings", null));
-        menu(body, "使用说明", "手动记账、AI 和数据备份", () -> new AlertDialog.Builder(this).setTitle("使用说明")
-                .setMessage("点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。")
-                .setPositiveButton("知道了", null).show());
-        menu(body, "关于爱记账", "原生 Android · 本地账本", () -> new AlertDialog.Builder(this).setTitle("关于爱记账")
-                .setMessage("爱记账 Android 0.2.2。流水保存在手机本机。").setPositiveButton("关闭", null).show());
+        LinearLayout options = card();
+        padding(options, 1, 2);
+        compactMenu(options, "分类管理", "", "◇", () -> navigate("categories", null));
+        compactMenu(options, "设置与数据", "", "⚙", () -> navigate("settings", null));
+        compactMenu(options, "使用说明", "", "?", () -> infoSheet("使用说明",
+                "点「记一笔」选择分类后输入金额，可点「今天」补记以前的账。点流水可编辑或删除。\n\n明细右下角进入 AI 助手。账本保存在本机，可在设置与数据中导出备份。"));
+        compactMenu(options, "关于爱记账", "", "♡", () -> infoSheet("关于爱记账", "爱记账 Android 0.2.3。流水保存在手机本机。"));
+        addCard(body, options);
     }
     /**
      * 显示月预算使用进度并提供当月编辑。
      */
     private void renderBudget(LinearLayout body) {
-        header(body, "", "月总预算");
         monthSelector(body);
         long budget = db.budget(month), spent = db.totals(month + "-01", monthEnd(month)).expense;
         LinearLayout summary = card();
@@ -915,6 +1031,7 @@ public final class MainActivity extends Activity {
         LinearLayout actions = column();
         padding(actions, 20, 6);
         EditText field = amountField(actions, "月总预算（元）", budget, budget > 0);
+        field.setBackground(outline(WHITE, 12, LINE));
         actions.addView(text("每个月独立设置，收入不会增加预算。", 13, MUTED, false));
         space(actions, 8);
         actions.addView(button("保存预算", true, () -> {
@@ -925,8 +1042,11 @@ public final class MainActivity extends Activity {
         }));
         if (budget > 0) {
             space(actions, 10);
-            actions.addView(button("删除本月预算", false, () -> new AlertDialog.Builder(this).setMessage("删除 " + month + " 的预算？")
-                    .setNegativeButton("保留", null).setPositiveButton("删除预算", (d, w) -> { db.setBudget(month, 0); render(); }).show()));
+            TextView delete = button("删除本月预算", false, () -> confirmSheet("删除本月预算？", monthLabel(month), "保留", "删除预算",
+                    () -> { db.setBudget(month, 0); render(); }));
+            delete.setTextColor(RED);
+            delete.setBackground(outline(WHITE, 15, 0xffe9cece));
+            actions.addView(delete);
         }
         body.addView(actions);
     }
@@ -976,15 +1096,15 @@ public final class MainActivity extends Activity {
      * 按收支和显示状态管理分类。
      */
     private void renderCategories(LinearLayout body) {
-        header(body, "让每笔账归到合适的地方", "分类管理");
         LinearLayout types = row();
-        padding(types, 18, 3);
+        padding(types, 4, 4);
+        types.setBackground(shape(FIELD, 16));
         for (String type : new String[]{LedgerDb.EXPENSE, LedgerDb.INCOME}) {
-            types.addView(button(LedgerDb.EXPENSE.equals(type) ? "支出" : "收入", categoryType.equals(type), () -> {
+            types.addView(segment(LedgerDb.EXPENSE.equals(type) ? "支出" : "收入", categoryType.equals(type), () -> {
                 categoryType = type; page.scroll = 0; renderedPage = null; render();
             }), new LinearLayout.LayoutParams(0, dp(46), 1));
         }
-        body.addView(types);
+        addCard(body, types);
         LinearLayout action = column();
         padding(action, 18, 8);
         action.addView(button("＋ 新增分类", true, () -> categoryNameDialog(null, categoryType)));
@@ -992,10 +1112,11 @@ public final class MainActivity extends Activity {
         List<LedgerDb.Category> list = db.categories(categoryType, true);
         for (boolean hiddenCategory : new boolean[]{false, true}) {
             boolean labelled = false;
+            LinearLayout items = column();
             for (LedgerDb.Category cat : list) {
                 if (cat.hidden != hiddenCategory) continue;
                 if (!labelled) { section(body, hiddenCategory ? "已隐藏" : "使用中的分类"); labelled = true; }
-                LinearLayout item = card();
+                LinearLayout item = column();
                 padding(item, 12, 7);
                 LinearLayout line = row();
                 line.addView(categoryBadge(cat, !cat.hidden, false), lp(34, 34));
@@ -1014,8 +1135,10 @@ public final class MainActivity extends Activity {
                     item.setOnDragListener((view, event) -> categoryDrag(view, event, cat));
                 }
                 item.addView(line);
-                addCard(body, item);
+                if (items.getChildCount() > 0) rule(items, 0xffedf1ee);
+                items.addView(item);
             }
+            if (labelled) addCard(body, items);
         }
     }
     /**
@@ -1074,23 +1197,31 @@ public final class MainActivity extends Activity {
      * 提供主题、模型与可跨平台的备份设置。
      */
     private void renderSettings(LinearLayout body) {
-        header(body, "", "设置与数据");
         renderThemes(body);
-        menu(body, "AI 助手设置", "API 地址、模型和连接测试", () -> navigate("assistantSettings", null));
-        menu(body, "默认隐藏金额", hidden ? "已开启" : "已关闭", this::toggleAmounts);
-        menu(body, "导出分月 ZIP 备份", "自动按日期分片", this::exportBackup);
-        menu(body, "导出兼容 JSON 备份", "保存到你选择的位置", () -> chooseExport(true));
-        menu(body, "从备份恢复", "支持分月 ZIP 与旧 JSON", () -> {
+        LinearLayout options = column();
+        padding(options, 20, 0);
+        compactMenu(options, "AI 助手设置", "", "", () -> navigate("assistantSettings", null));
+        compactMenu(options, "默认隐藏金额", hidden ? "已开启" : "已关闭", "", this::toggleAmounts);
+        compactMenu(options, "导出分月 ZIP 备份", "", "", this::exportBackup);
+        compactMenu(options, "导出兼容 JSON 备份", "", "", () -> chooseExport(true));
+        compactMenu(options, "从备份恢复", "", "", () -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.setType("*/*");
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "application/zip", "application/octet-stream"});
             startActivityForResult(intent, IMPORT);
         });
-        menu(body, "清空本地数据", "删除记账并恢复默认分类", this::confirmClear);
-        LinearLayout tip = card();
-        tip.addView(text("备份包含备注、检索线索和已添加的定位，请保管好文件。", 13, MUTED, false));
-        addCard(body, tip);
+        space(options, 10);
+        TextView tip = text("备份包含备注、检索线索和已添加的定位，请保管好文件。", 13, MUTED, false);
+        tip.setBackground(shape(FIELD, 12));
+        padding(tip, 12, 10);
+        options.addView(tip);
+        space(options, 12);
+        TextView clear = button("清空全部数据", false, this::confirmClear);
+        clear.setTextColor(RED);
+        clear.setBackground(outline(WHITE, 15, 0xffe9cece));
+        options.addView(clear, lp(-1, 52));
+        body.addView(options);
     }
     /**
      * 打开分月备份的系统保存界面。
@@ -1221,6 +1352,7 @@ public final class MainActivity extends Activity {
         entryCard.setClipToOutline(true);
         entryCard.setElevation(dp(8));
         entryCard.setClickable(true);
+        host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         root.addView(entryCard, new FrameLayout.LayoutParams(-1, -1));
         buildEntry();
         if (ValueAnimator.areAnimatorsEnabled()) {
@@ -1341,7 +1473,8 @@ public final class MainActivity extends Activity {
             savedEntryId = draft.id;
             if ("home".equals(page.name) && !month.equals(LedgerMath.month(draft.businessDate))) {
                 month = LedgerMath.month(draft.businessDate);
-                page.scroll = 0;
+                page.firstRow = 0;
+                page.rowOffset = 0;
                 renderedPage = null;
             }
             closeEntry(true);
@@ -1355,11 +1488,12 @@ public final class MainActivity extends Activity {
         if (saved) render();
         Runnable finish = () -> {
             root.removeView(card); entryCard = null; entryKeypad = null; draft = null;
+            host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
             entryCategoryScroll = null; entryDock = null; locating = false; noteView = null;
             if (saved) {
-                success("已保存");
+                if (saveStatus == null) success("已保存");
                 String marker = savedEntryId;
-                root.postDelayed(() -> { if (marker != null && marker.equals(savedEntryId)) savedEntryId = null; }, 2200);
+                root.postDelayed(() -> clearSaveFeedback(marker), 2200);
             }
             root.requestApplyInsets();
         };
@@ -1389,7 +1523,11 @@ public final class MainActivity extends Activity {
         if (managingEntryCategories && "categories".equals(page.name)) {
             managingEntryCategories = false;
             backPage();
-            if (entryCard != null) { buildEntry(); entryCard.setVisibility(View.VISIBLE); }
+            if (entryCard != null) {
+                host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+                buildEntry();
+                entryCard.setVisibility(View.VISIBLE);
+            }
             return;
         }
         if (entryCard != null) {
@@ -1469,7 +1607,11 @@ public final class MainActivity extends Activity {
      * 保留当前原生滚动容器的位置。
      */
     private void keepScroll() {
-        if (pageScroll != null) page.scroll = pageScroll.getScrollY();
+        if (recordList != null) {
+            page.firstRow = recordList.getFirstVisiblePosition();
+            View first = recordList.getChildAt(0);
+            page.rowOffset = first == null ? 0 : first.getTop();
+        } else if (pageScroll != null) page.scroll = pageScroll.getScrollY();
     }
 
     /**
@@ -1523,9 +1665,32 @@ public final class MainActivity extends Activity {
      * 创建金额显示切换入口。
      */
     private View eyeButton(int color) {
-        TextView eye = ghost(hidden ? "◉̸" : "◉", this::toggleAmounts);
+        View eye = new View(this) {
+            /**
+             * 绘制金额可见或隐藏图形。
+             */
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                canvas.save();
+                canvas.translate(getWidth() / 2f, getHeight() / 2f);
+                canvas.scale(dp(1), dp(1));
+                Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG);
+                pen.setColor(color);
+                pen.setStyle(Paint.Style.STROKE);
+                pen.setStrokeWidth(1.7f);
+                pen.setStrokeCap(Paint.Cap.ROUND);
+                Path edge = new Path();
+                edge.moveTo(-8, 0);
+                edge.quadTo(0, -10, 8, 0);
+                edge.quadTo(0, 10, -8, 0);
+                canvas.drawPath(edge, pen);
+                canvas.drawCircle(0, 0, 2.6f, pen);
+                if (hidden) canvas.drawLine(-8, 7, 8, -7, pen);
+                canvas.restore();
+            }
+        };
         eye.setContentDescription(hidden ? "显示金额" : "隐藏金额");
-        eye.setTextColor(color);
+        eye.setOnClickListener(view -> toggleAmounts());
         return eye;
     }
 
@@ -1586,7 +1751,6 @@ public final class MainActivity extends Activity {
      * 打开不需要模型的全文流水搜索。
      */
     private void renderSearch(LinearLayout body) {
-        header(body, "", "搜索流水");
         LinearLayout bar = row();
         padding(bar, 20, 4);
         EditText field = editField("备注、店名、菜品等", searchText, 120, true);
@@ -1649,7 +1813,8 @@ public final class MainActivity extends Activity {
         if (target.compareTo("1900-01") < 0 || target.compareTo("9999-12") > 0 ||
                 (gesture && direction > 0 && target.compareTo(LedgerMath.month(LedgerMath.today())) > 0)) return;
         month = target;
-        page.scroll = gesture && direction > 0 ? Integer.MAX_VALUE : 0;
+        page.firstRow = gesture && direction > 0 ? Integer.MAX_VALUE : 0;
+        page.rowOffset = 0;
         renderedPage = null;
         render();
         if (gesture && direction > 0) success(monthLabel(month));
@@ -1661,7 +1826,7 @@ public final class MainActivity extends Activity {
      * @author chaoshunh
      * @date 2026/11/25
      */
-    private final class MonthScroll extends ScrollView {
+    private final class MonthScroll extends ListView {
         private float originX, originY, lastY, travel;
         private int direction;
         private boolean tracking;
@@ -1695,7 +1860,7 @@ public final class MainActivity extends Activity {
             cancel.recycle();
             int step = direction;
             tracking = false;
-            post(() -> { if (pageScroll == this && "home".equals(page.name)) shiftHome(step, true); });
+            post(() -> { if (recordList == this && "home".equals(page.name)) shiftHome(step, true); });
             return true;
         }
     }
@@ -1788,6 +1953,7 @@ public final class MainActivity extends Activity {
         categoryType = draft.type;
         managingEntryCategories = true;
         entryCard.setVisibility(View.GONE);
+        host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
         navigate("categories", null);
     }
 
@@ -1844,18 +2010,34 @@ public final class MainActivity extends Activity {
         padding(body, 16, 12);
         JSONArray messages = assistant.messages();
         if (messages.length() == 0) {
-            LinearLayout intro = card();
-            intro.addView(text("✦  爱记账助手", 20, DARK, true));
-            space(intro, 8);
-            intro.addView(text("用一句话记账、查流水，或者聊聊你的花销。", 15, MUTED, false));
+            LinearLayout intro = column();
+            padding(intro, 5, 0);
+            space(intro, 78);
+            TextView mark = text("✦", 25, GREEN, true);
+            mark.setGravity(Gravity.CENTER);
+            mark.setBackground(shape(SOFT, 15));
+            intro.addView(mark, lp(53, 53));
+            space(intro, 11);
+            intro.addView(text("想记一笔，还是聊聊花销？", 22, DARK, true));
+            space(intro, 9);
             if (assistant.configured()) {
-                for (String example : new String[]{"今天中午吃叉烧饭花了28元", "帮我看看这个月花了多少", "最近哪类支出占比最高？"}) {
-                    TextView suggestion = ghost(example, () -> sendAssistant(example));
-                    suggestion.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-                    intro.addView(suggestion);
+                LinearLayout examples = row();
+                for (String example : new String[]{"午餐花了 28 元", "这个月主要花在哪？"}) {
+                    TextView suggestion = button(example, false, () -> sendAssistant(example));
+                    suggestion.setBackground(outline(WHITE, 12, LINE));
+                    LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(0, dp(46), 1);
+                    size.rightMargin = dp(6);
+                    examples.addView(suggestion, size);
                 }
-            } else intro.addView(ghost("配置 AI 模型", () -> navigate("assistantSettings", null)));
+                intro.addView(examples);
+            } else {
+                intro.addView(text("连接模型后，就可以用一句话记账或查账。", 15, MUTED, false));
+                space(intro, 11);
+                intro.addView(button("连接模型", true, () -> navigate("assistantSettings", null)), lp(96, 46));
+            }
             body.addView(intro);
+        } else if (!assistant.configured()) {
+            body.addView(ghost("连接模型继续聊天", () -> navigate("assistantSettings", null)));
         }
         for (int i = 0; i < messages.length(); i++) {
             JSONObject item = messages.optJSONObject(i);
@@ -2004,18 +2186,18 @@ public final class MainActivity extends Activity {
      * 显示模型连接配置及测试操作。
      */
     private void renderAssistantSettings(LinearLayout body) {
-        header(body, "", "AI 助手设置");
         LinearLayout form = card();
         EditText base = assistantSettingField(form, "API 地址", "https://api.example.com/v1", assistant.base);
-        EditText model = assistantSettingField(form, "模型名称", "填写服务商模型 ID", assistant.model);
+        EditText model = assistantSettingField(form, "模型 ID", "填写服务商模型 ID", assistant.model);
         EditText key = assistantSettingField(form, "API Key", assistant.key.isEmpty() ? "按服务商要求填写" : "已在本次运行中填写", "");
+        for (EditText field : new EditText[]{base, model, key}) field.setBackground(outline(WHITE, 12, LINE));
         key.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         space(form, 10);
         form.addView(text("模型会收到输入、必要的会话上下文和相关汇总。原始流水、备注和定位由本机处理。配置在本次运行中有效。", 13, MUTED, false));
         space(form, 14);
         LinearLayout actions = row();
         TextView status = text("", 13, MUTED, false);
-        actions.addView(ghost("测试连接", () -> {
+        TextView testButton = button("测试连接", false, () -> {
             try {
                 LedgerAssistant test = assistant.testConfiguration(base.getText().toString(), model.getText().toString(), key.getText().toString());
                 status.setText("正在连接…");
@@ -2027,7 +2209,8 @@ public final class MainActivity extends Activity {
                     runOnUiThread(() -> status.setText(result));
                 }, "ledger-assistant-test").start();
             } catch (Exception error) { status.setText(error.getMessage()); }
-        }), new LinearLayout.LayoutParams(0, dp(48), 1));
+        });
+        testButton.setBackground(outline(WHITE, 12, LINE));
         actions.addView(button("保存设置", true, () -> {
             try {
                 assistant.saveConfiguration(base.getText().toString(), model.getText().toString(), key.getText().toString());
@@ -2035,14 +2218,17 @@ public final class MainActivity extends Activity {
                 status.setText("已保存");
             } catch (Exception error) { status.setText(error.getMessage()); }
         }), new LinearLayout.LayoutParams(0, dp(48), 1));
-        form.addView(actions);
-        form.addView(ghost("清除配置", () -> {
+        LinearLayout.LayoutParams testSize = new LinearLayout.LayoutParams(0, dp(48), 1);
+        testSize.leftMargin = dp(7);
+        actions.addView(testButton, testSize);
+        actions.addView(ghost("清除配置", () -> {
             stopAssistant(false);
             assistant.clearConfiguration();
             hideKeyboard();
             render();
             success("模型配置已清除");
-        }));
+        }), new LinearLayout.LayoutParams(0, dp(48), 1));
+        form.addView(actions);
         form.addView(status);
         addCard(body, form);
     }
@@ -2063,7 +2249,6 @@ public final class MainActivity extends Activity {
      * 列出可恢复的本机会话。
      */
     private void renderAssistantHistory(LinearLayout body) {
-        header(body, "", "历史会话");
         List<JSONObject> sessions = db.assistantSessions();
         if (sessions.isEmpty()) {
             LinearLayout placeholder = card();
@@ -2548,7 +2733,10 @@ public final class MainActivity extends Activity {
                 buildEntry();
             } else {
                 month = YearMonth.from(selected).toString();
-                page.scroll = 0;
+                if ("home".equals(page.name)) {
+                    page.firstRow = 0;
+                    page.rowOffset = 0;
+                } else page.scroll = 0;
                 renderedPage = null;
                 render();
             }
@@ -2700,7 +2888,12 @@ public final class MainActivity extends Activity {
         LinearLayout bar = row();
         padding(bar, 18, 0);
         bar.setBackgroundColor(TOP);
-        bar.addView(text(title, 21, TOP_TEXT, true), lp(-1, 64));
+        bar.addView(text(title, 21, TOP_TEXT, true), new LinearLayout.LayoutParams(0, dp(64), 1));
+        if (isMain()) {
+            View eye = eyeButton(TOP_TEXT);
+            eye.setBackground(shape(0x75ffffff, 15));
+            bar.addView(eye, lp(46, 46));
+        }
         shell.addView(bar);
         rule(shell, LINE);
     }
@@ -2853,5 +3046,314 @@ public final class MainActivity extends Activity {
         sheet.addView(actions);
         dialog.setContentView(sheet);
         showBottomSheet(dialog, sheet);
+    }
+
+    /**
+     * 隐藏保存提示和高亮而不重绘流水列表。
+     */
+    private void clearSaveFeedback(String marker) {
+        if (marker == null) return;
+        if (!marker.equals(savedEntryId)) return;
+        savedEntryId = null;
+        if (saveStatus != null) saveStatus.setVisibility(View.GONE);
+        if (highlightedEntry != null) highlightedEntry.setBackgroundColor(Color.TRANSPARENT);
+    }
+
+    /**
+     * 显示月份摘要及可回收复用的首页流水列表。
+     */
+    private void renderHomePage(LinearLayout shell) {
+        List<LedgerDb.Entry> records = db.statsEntries(month + "-01", monthEnd(month), null);
+        LinearLayout heading = column();
+        renderHome(heading, records.size());
+        if (records.isEmpty()) entryList(heading, records);
+        attachRecordList(shell, new MonthScroll(), heading, records);
+        renderTabs(shell);
+        addAssistantFab();
+    }
+
+    /**
+     * 将标题、日期和账目接入共用的原生可复用列表。
+     */
+    private void attachRecordList(LinearLayout shell, ListView list, LinearLayout heading, List<LedgerDb.Entry> records) {
+        pageScroll = null;
+        list.setDivider(null);
+        list.setVerticalScrollBarEnabled(false);
+        list.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        list.setSelector(android.R.color.transparent);
+        list.setBackgroundColor(WHITE);
+        list.addHeaderView(heading, null, false);
+        View footer = new View(this);
+        footer.setLayoutParams(new android.widget.AbsListView.LayoutParams(-1, dp(24)));
+        list.addFooterView(footer, null, false);
+        list.setAdapter(new HomeRows(records));
+        list.setOnItemClickListener((parent, item, position, id) -> {
+            Object data = parent.getItemAtPosition(position);
+            if (data instanceof LedgerDb.Entry) navigate("detail", ((LedgerDb.Entry) data).id);
+        });
+        recordList = list;
+        shell.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
+        if (animateNavigation) {
+            animateNavigation = false;
+            animateIn(list, 12, .5f, 260);
+        }
+        renderedPage = page;
+        int first = page.firstRow, offset = page.rowOffset;
+        if (first != 0 || offset != 0) list.post(() -> {
+            if (recordList != list) return;
+            if (first == Integer.MAX_VALUE) list.setSelection(list.getCount() - 1);
+            else list.setSelectionFromTop(Math.min(first, list.getCount() - 1), offset);
+        });
+    }
+
+    /**
+     * 显示与 Web 相同密度的单行工具和账户入口。
+     */
+    private void compactMenu(LinearLayout parent, String label, String caption, String glyph, Runnable action) {
+        if (parent.getChildCount() > 0) rule(parent, 0xffedf1ee);
+        LinearLayout line = row();
+        padding(line, 16, 8);
+        if (!glyph.isEmpty()) {
+            TextView icon = text(glyph, 15, GREEN, false);
+            icon.setGravity(Gravity.CENTER);
+            icon.setBackground(shape(SOFT, 13));
+            line.addView(icon, lp(42, 42));
+        }
+        LinearLayout labels = column();
+        labels.setPadding(glyph.isEmpty() ? 0 : dp(10), 0, dp(4), 0);
+        labels.addView(text(label, 15, DARK, !caption.isEmpty()));
+        if (!caption.isEmpty()) labels.addView(text(caption, 12, MUTED, false));
+        line.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+        line.addView(text("›", 17, MUTED, false));
+        line.setOnClickListener(view -> action.run());
+        parent.addView(line, lp(-1, glyph.isEmpty() ? 51 : 66));
+    }
+
+    /**
+     * 在统一的底部弹层展示使用说明或版本信息。
+     */
+    private void infoSheet(String title, String message) {
+        Dialog dialog = new Dialog(this);
+        LinearLayout sheet = column();
+        padding(sheet, 20, 18);
+        sheet.setBackground(shape(WHITE, 20));
+        sheet.addView(text(title, 20, DARK, true));
+        space(sheet, 12);
+        TextView content = text(message, 14, DARK, false);
+        content.setLineSpacing(dp(4), 1f);
+        sheet.addView(content);
+        space(sheet, 14);
+        sheet.addView(button("关闭", true, dialog::dismiss), lp(-1, 50));
+        dialog.setContentView(sheet);
+        showBottomSheet(dialog, sheet);
+    }
+
+    /**
+     * 将账单支出圆环和前五类图例并排显示。
+     */
+    private LinearLayout reportDonut(List<Map.Entry<String, Long>> ranking, Map<String, LedgerDb.Category> categories, long total) {
+        LinearLayout container = card();
+        LinearLayout content = row();
+        content.setGravity(Gravity.TOP);
+        int[] palette = {0xff246b54, 0xff5c8aa1, 0xffa9875a, 0xff8775a5, 0xff658760, 0xff899690};
+        List<Long> amounts = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        long remaining = total;
+        for (int i = 0; i < Math.min(5, ranking.size()); i++) {
+            Map.Entry<String, Long> item = ranking.get(i);
+            LedgerDb.Category category = categories.get(item.getKey());
+            labels.add(category == null ? "未知分类" : category.name);
+            amounts.add(item.getValue());
+            remaining -= item.getValue();
+        }
+        if (remaining > 0) { labels.add("其它分类"); amounts.add(remaining); }
+        View ring = new View(this) {
+            /**
+             * 绘制与图例对应的类别比例。
+             */
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas);
+                Paint pen = new Paint(Paint.ANTI_ALIAS_FLAG);
+                float middle = getWidth() / 2f, radius = middle - dp(1);
+                pen.setStyle(Paint.Style.FILL);
+                float angle = -90;
+                for (int i = 0; i < amounts.size(); i++) {
+                    pen.setColor(hidden ? LINE : palette[i]);
+                    float sweep = amounts.get(i) * 360f / total;
+                    canvas.drawArc(middle - radius, middle - radius, middle + radius, middle + radius, angle, sweep, true, pen);
+                    angle += sweep;
+                }
+                pen.setColor(WHITE);
+                canvas.drawCircle(middle, middle, radius * .64f, pen);
+            }
+        };
+        ring.setContentDescription("分类支出组成");
+        content.addView(ring, lp(105, 105));
+        LinearLayout legend = column();
+        legend.setPadding(dp(10), 0, 0, 0);
+        for (int i = 0; i < labels.size(); i++) {
+            LinearLayout item = row();
+            View dot = new View(this);
+            dot.setBackground(shape(hidden ? LINE : palette[i], 8));
+            item.addView(dot, lp(8, 8));
+            String ratio = hidden ? "" : String.format(Locale.ROOT, " %.1f%%", amounts.get(i) * 100d / total);
+            TextView label = text(labels.get(i) + ratio, 12, DARK, false);
+            label.setPadding(dp(7), 0, 0, 0);
+            item.addView(label, lp(-1, 20));
+            legend.addView(item);
+        }
+        content.addView(legend, new LinearLayout.LayoutParams(0, -2, 1));
+        container.addView(content);
+        return container;
+    }
+
+    /**
+     * 将月份流水拆为日期行和可复用的普通账目行。
+     *
+     * @author chaoshunh
+     * @date 2026/11/26
+     */
+    private final class HomeRows extends BaseAdapter {
+        private final List<Object> items = new ArrayList<>();
+        private final Map<String, LedgerDb.Category> categories = new HashMap<>();
+        private final Map<String, LedgerDb.Totals> totals = new HashMap<>();
+
+        /**
+         * 生成按日期的轻量列表条目和每日合计。
+         */
+        HomeRows(List<LedgerDb.Entry> records) {
+            for (LedgerDb.Category category : db.categories(null, true)) categories.put(category.id, category);
+            String date = "";
+            LedgerDb.Totals day = new LedgerDb.Totals();
+            for (LedgerDb.Entry record : records) {
+                if (!date.equals(record.businessDate)) {
+                    date = record.businessDate;
+                    day = new LedgerDb.Totals();
+                    totals.put(date, day);
+                    items.add(date);
+                }
+                if (LedgerDb.INCOME.equals(record.type)) day.income += record.amountMinor;
+                else day.expense += record.amountMinor;
+                items.add(record);
+            }
+        }
+
+        /**
+         * 返回账本列表的总行数。
+         */
+        @Override public int getCount() { return items.size(); }
+
+        /**
+         * 返回指定日期或流水。
+         */
+        @Override public Object getItem(int position) { return items.get(position); }
+
+        /**
+         * 返回列表项的位置标识。
+         */
+        @Override public long getItemId(int position) { return position; }
+
+        /**
+         * 区分日期和流水的回收池。
+         */
+        @Override public int getViewTypeCount() { return 2; }
+
+        /**
+         * 标识当前行的回收类型。
+         */
+        @Override public int getItemViewType(int position) { return isEnabled(position) ? 1 : 0; }
+
+        /**
+         * 告知列表日期行无需点击。
+         */
+        @Override public boolean areAllItemsEnabled() { return false; }
+
+        /**
+         * 仅可进入实际流水的详情。
+         */
+        @Override public boolean isEnabled(int position) { return getItem(position) instanceof LedgerDb.Entry; }
+
+        /**
+         * 复用窗口内的视图并绑定正文数据。
+         */
+        @Override public View getView(int position, View recycled, android.view.ViewGroup parent) {
+            Object item = getItem(position);
+            if (item instanceof String) return dateRow((String) item, position, (LinearLayout) recycled);
+            return recordRow((LedgerDb.Entry) item, (LinearLayout) recycled);
+        }
+
+        /**
+         * 绑定日期分组和当日收支。
+         */
+        private View dateRow(String date, int position, LinearLayout container) {
+            if (container == null) {
+                container = column();
+                LinearLayout header = row();
+                padding(header, 7, 7);
+                header.addView(text("", 13, DARK, true), new LinearLayout.LayoutParams(0, -2, 1));
+                header.addView(text("", 11, MUTED, false));
+                container.addView(header);
+                rule(container, LINE);
+            }
+            container.setPadding(dp(20), position == 0 ? 0 : dp(12), dp(20), 0);
+            LinearLayout line = (LinearLayout) container.getChildAt(0);
+            ((TextView) line.getChildAt(0)).setText(dayLabel(date));
+            LedgerDb.Totals day = totals.get(date);
+            String income = day.income > 0 ? "收入 " + money(day.income) : "";
+            String expense = day.expense > 0 ? "支出 " + money(day.expense) : "";
+            ((TextView) line.getChildAt(1)).setText(income + (!income.isEmpty() && !expense.isEmpty() ? " · " : "") + expense);
+            return container;
+        }
+
+        /**
+         * 在复用行上更新分类、备注、金额及保存高亮。
+         */
+        private View recordRow(LedgerDb.Entry entry, LinearLayout container) {
+            if (container == null) {
+                container = column();
+                padding(container, 20, 0);
+                LinearLayout line = row();
+                padding(line, 8, 6);
+                line.setMinimumHeight(dp(58));
+                line.addView(new FrameLayout(MainActivity.this), lp(32, 32));
+                LinearLayout labels = column();
+                labels.setPadding(dp(10), 0, dp(8), 0);
+                labels.addView(text("", 15, DARK, true));
+                TextView sublabel = text("", 12, MUTED, false);
+                sublabel.setPadding(0, dp(3), 0, 0);
+                labels.addView(sublabel);
+                line.addView(labels, new LinearLayout.LayoutParams(0, -2, 1));
+                line.addView(text("", 15, DARK, true));
+                container.addView(line);
+                rule(container, 0xfff7f8fa);
+            }
+            LinearLayout line = (LinearLayout) container.getChildAt(0);
+            if (entry.id.equals(savedEntryId)) {
+                line.setBackground(shape(SOFT, 8));
+                highlightedEntry = line;
+            } else {
+                if (highlightedEntry == line) highlightedEntry = null;
+                line.setBackgroundColor(Color.TRANSPARENT);
+            }
+            LedgerDb.Category category = categories.get(entry.categoryId);
+            FrameLayout icon = (FrameLayout) line.getChildAt(0);
+            if (!entry.categoryId.equals(icon.getTag())) {
+                icon.removeAllViews();
+                icon.addView(categoryBadge(category, true, false), new FrameLayout.LayoutParams(-1, -1));
+                icon.setTag(entry.categoryId);
+            }
+            String name = category == null ? "未知分类" : category.name;
+            LinearLayout labels = (LinearLayout) line.getChildAt(1);
+            boolean hasNote = !entry.note.isEmpty();
+            ((TextView) labels.getChildAt(0)).setText(hasNote ? entry.note : name);
+            TextView sublabel = (TextView) labels.getChildAt(1);
+            sublabel.setText(name);
+            sublabel.setVisibility(hasNote ? View.VISIBLE : View.GONE);
+            TextView amount = (TextView) line.getChildAt(2);
+            boolean income = LedgerDb.INCOME.equals(entry.type);
+            amount.setText((income ? "+" : "−") + (hidden ? "••••" : LedgerMath.money(entry.amountMinor)));
+            amount.setTextColor(income ? GREEN : DARK);
+            return container;
+        }
     }
 }
